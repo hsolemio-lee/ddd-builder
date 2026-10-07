@@ -1,0 +1,150 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { createApp } from '../server/app.mjs';
+
+async function setup(t, options = {}) {
+  const dir = await mkdtemp(join(tmpdir(), 'ddd-mcp-'));
+  const app = await createApp({ dataDir: dir, code: 'mcp-test-code' });
+  t.after(async () => {
+    await app.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+  const url = `http://127.0.0.1:${app.server.address().port}`;
+  const { createMcpServer } = await import('../mcp/server.mjs');
+  const server = createMcpServer({ url, code: 'mcp-test-code', ...options });
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'ddd-test', version: '1.0.0' });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  t.after(async () => {
+    await client.close();
+    await server.close();
+  });
+  return { client, url };
+}
+function value(result) {
+  assert.notEqual(result.isError, true, JSON.stringify(result));
+  return JSON.parse(result.content[0].text);
+}
+
+test('MCP lists projects and exposes one project as tools, resources and an analysis prompt', async (t) => {
+  const { client } = await setup(t);
+  const names = (await client.listTools()).tools.map((tool) => tool.name);
+  assert.deepEqual(names.sort(), ['get_project_board', 'list_projects']);
+  const projects = value(
+    await client.callTool({ name: 'list_projects', arguments: {} }),
+  );
+  assert.ok(projects.length > 0);
+  const projectId = projects[0].id;
+  const board = value(
+    await client.callTool({
+      name: 'get_project_board',
+      arguments: { projectId, stage: 'events' },
+    }),
+  );
+  assert.equal(board.project.id, projectId);
+  assert.ok(board.cards.length > 0);
+  assert.ok(board.cards.every((c) => c.stage === 'events'));
+  const resource = await client.readResource({
+    uri: `ddd://projects/${projectId}`,
+  });
+  assert.equal(JSON.parse(resource.contents[0].text).project.id, projectId);
+  const workspaceResource = await client.readResource({
+    uri: 'ddd://projects',
+  });
+  assert.ok(!workspaceResource.contents[0].text.includes('mcp-test-code'));
+  const prompt = await client.getPrompt({
+    name: 'analyze_event_storming',
+    arguments: { projectId },
+  });
+  assert.ok(prompt.messages[0].content.text.includes('바운디드 컨텍스트'));
+  assert.ok(prompt.messages[0].content.text.includes(projectId));
+});
+
+test('MCP writable tools persist cards as AI and protect stale versions', async (t) => {
+  const { client } = await setup(t, { readOnly: false });
+  const projectId = value(
+    await client.callTool({ name: 'list_projects', arguments: {} }),
+  )[0].id;
+  const card = value(
+    await client.callTool({
+      name: 'create_card',
+      arguments: {
+        projectId,
+        stage: 'events',
+        kind: 'event',
+        title: 'AI가 발견한 이벤트',
+      },
+    }),
+  );
+  assert.equal(card.updatedBy, 'AI 도우미');
+  const updated = value(
+    await client.callTool({
+      name: 'update_card',
+      arguments: {
+        cardId: card.id,
+        revision: card.revision,
+        title: 'AI가 정리한 이벤트',
+      },
+    }),
+  );
+  assert.equal(updated.revision, card.revision + 1);
+  const stale = await client.callTool({
+    name: 'update_card',
+    arguments: {
+      cardId: card.id,
+      revision: card.revision,
+      title: '덮어쓰면 안 됨',
+    },
+  });
+  assert.equal(stale.isError, true);
+  const error = JSON.parse(stale.content[0].text);
+  assert.equal(error.status, 409);
+  assert.equal(error.current.title, updated.title);
+  const board = value(
+    await client.callTool({
+      name: 'get_project_board',
+      arguments: { projectId },
+    }),
+  );
+  assert.equal(board.cards.find((c) => c.id === card.id).title, updated.title);
+});
+
+test('MCP returns actionable authentication and missing-project errors', async (t) => {
+  const { client } = await setup(t, { code: 'wrong-code' });
+  const result = await client.callTool({
+    name: 'list_projects',
+    arguments: {},
+  });
+  assert.equal(result.isError, true);
+  assert.equal(JSON.parse(result.content[0].text).status, 401);
+});
+
+test('real stdio MCP initializes and reads the HTTP board without stdout noise', async (t) => {
+  const { url } = await setup(t);
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [resolve('mcp/index.mjs')],
+    env: {
+      ...process.env,
+      DDD_URL: url,
+      DDD_CODE: 'mcp-test-code',
+      DDD_READ_ONLY: 'true',
+    },
+    stderr: 'pipe',
+  });
+  const client = new Client({ name: 'stdio-test', version: '1.0.0' });
+  t.after(() => client.close());
+  await client.connect(transport);
+  const projects = value(
+    await client.callTool({ name: 'list_projects', arguments: {} }),
+  );
+  assert.equal(projects[0].name, '온라인 주문 서비스');
+});
