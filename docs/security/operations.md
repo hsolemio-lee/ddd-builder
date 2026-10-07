@@ -20,6 +20,30 @@
 
 매일 백업을 암호화해 호스트 외부에 저장하고 30일 후 폐기한다. 암호화 키는 백업과 별도로 접근을 제한한다. 최소 매월 및 데이터 스키마 변경 전에 별도 시험 서버로 복원하고 프로젝트·카드·권한·철회 상태와 파일 권한을 확인한다. 배포 전 백업과 롤백 대상 커밋을 기록한다. Docker 볼륨 하나만 유지하는 것은 백업이 아니다.
 
+암호화 도구 `age`와 수신자 공개키를 준비한 뒤, 백업 예시는 다음과 같다. `AGE_RECIPIENT`에는 운영자가 보관한 공개키를 넣고 개인키는 이 호스트와 백업 위치에 함께 저장하지 않는다. `age` 사용법은 공식 문서 <https://age-encryption.org/>를 확인한다.
+
+```sh
+# 실패한 백업을 정상 백업으로 취급하지 않도록 파이프 오류도 감지한다.
+set -o pipefail
+umask 077
+mkdir -p backups
+backup_name="backups/ddd-builder-$(date -u +%Y%m%dT%H%M%SZ).tar.gz.age"
+docker compose stop ddd-builder
+# stop 상태에서도 volumes-from으로 같은 데이터 볼륨을 읽을 수 있다.
+if docker run --rm --user root --volumes-from ddd-builder:ro \
+  --entrypoint tar ddd-builder:local -czf - -C /app/data . \
+  | age -r "$AGE_RECIPIENT" -o "$backup_name"; then
+  backup_status=0
+else
+  backup_status=$?
+fi
+docker compose start ddd-builder
+# 실패하면 부분 파일을 폐기하고 경보를 남긴다.
+if [ "$backup_status" -ne 0 ]; then rm -f "$backup_name"; exit "$backup_status"; fi
+```
+
+이 명령은 로컬 암호화 파일까지만 만든다. 별도 저장소 업로드·일별 실행·30일 보관 삭제·실패 경보는 실제 운영 저장소와 자격증명을 설정한 뒤 연결해야 한다. 자동화에는 앱 재시작을 보장하는 종료 처리도 넣는다. 백업을 검증하지 않고 원본 볼륨에 복원하지 않는다.
+
 ## 보안 업데이트
 
 매 PR과 매주 의존성 취약점 및 비밀 유출 검사를 실행한다. 운영자는 컨테이너 OS·Node·Tailscale 업데이트도 별도로 확인한다. 실제 적용 가능성을 검토하며 보안 수정은 치명적 24시간, 높은 심각도 7일, 중간 심각도 30일 이내 대응을 목표로 한다. 외부 공격이 확인되면 우선 서비스를 제한하고 복구 후 원인을 제거한다.
