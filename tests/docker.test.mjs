@@ -31,6 +31,8 @@ test(
       DDD_CONTAINER_NAME: container,
       PUBLIC_URL: base,
       ACCESS_CODE: '',
+      SERVICE_MODE: 'workshop',
+      AUTH_MODE: 'legacy',
     };
     const compose = (...args) =>
       run('docker', ['compose', '-p', project, ...args], {
@@ -42,11 +44,30 @@ test(
     t.after(() => compose('down', '--volumes', '--remove-orphans'));
     await compose('up', '-d', '--build', '--wait');
     assert.equal((await fetch(base)).status, 200);
+    const config = JSON.parse(
+      (await run('docker', ['inspect', '--format', '{{json .}}', container]))
+        .stdout,
+    );
+    assert.equal(config.Config.User, '1000:1000');
+    assert.equal(config.HostConfig.ReadonlyRootfs, true);
+    assert.equal(config.HostConfig.Memory, 512 * 1024 * 1024);
+    assert.equal(config.HostConfig.PidsLimit, 128);
+    assert.ok(config.HostConfig.CapDrop.includes('ALL'));
+    assert.equal(
+      config.NetworkSettings.Ports['3210/tcp'][0].HostIp,
+      '127.0.0.1',
+    );
+    await assert.rejects(
+      run('docker', ['run', '--rm', '--network', 'none', 'ddd-builder:local']),
+      (error) => /OIDC.*required/.test(error.stderr),
+    );
+
     const { stdout: codeOutput } = await run('docker', [
       'exec',
       container,
-      'cat',
-      '/app/data/access-code',
+      'node',
+      '-e',
+      "process.stdout.write(require('node:fs').readFileSync('/app/data/access-code','utf8'))",
     ]);
     const code = codeOutput.trim();
     assert.ok(code.length >= 20);
@@ -111,7 +132,13 @@ test(
     await compose('up', '-d', '--no-build', '--force-recreate', '--wait');
     assert.equal(
       (
-        await run('docker', ['exec', container, 'cat', '/app/data/access-code'])
+        await run('docker', [
+          'exec',
+          container,
+          'node',
+          '-e',
+          "process.stdout.write(require('node:fs').readFileSync('/app/data/access-code','utf8'))",
+        ])
       ).stdout.trim(),
       code,
     );

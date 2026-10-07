@@ -28,6 +28,9 @@ import CardEditor from './components/CardEditor';
 import ProjectForm from './components/ProjectForm';
 import ShareDialog from './components/ShareDialog';
 import Modal from './components/Modal';
+import CardDetails from './components/CardDetails';
+import AccessDialog from './components/AccessDialog';
+import SecurityDialog from './components/SecurityDialog';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -51,6 +54,8 @@ export default function App() {
   const [projectForm, setProjectForm] = useState<{ project?: Project }>();
   const [dialog, setDialog] = useState<'share' | 'mcp' | 'export'>();
   const [guide, setGuide] = useState(false);
+  const [details, setDetails] = useState<Card>();
+  const [securityOpen, setSecurityOpen] = useState(false);
   const [sidebar, setSidebar] = useState(false);
   const [filter, setFilter] = useState('all');
   const [query, setQuery] = useState('');
@@ -87,6 +92,38 @@ export default function App() {
         setNotice('보드 데이터를 읽지 못했어요. 새로고침해 주세요.');
       }
     });
+    function applyUser(next: User) {
+      if (!active) return;
+      if (next.id !== user!.id) {
+        setWorkspace({ projects: [], cards: [] });
+        setEditor(undefined);
+        setDetails(undefined);
+        setProjectForm(undefined);
+        setDialog(undefined);
+        setSecurityOpen(false);
+        setReceivedState(false);
+        setProjectId('');
+        localStorage.removeItem('ddd-project');
+      }
+      setUser((current) =>
+        current &&
+        current.id === next.id &&
+        current.siteAdmin === next.siteAdmin &&
+        current.email === next.email &&
+        current.name === next.name
+          ? current
+          : next,
+      );
+      if (!next.siteAdmin) setSecurityOpen(false);
+    }
+    source.addEventListener('user', (event) => {
+      if (!active) return;
+      try {
+        applyUser(JSON.parse((event as MessageEvent).data));
+      } catch {
+        /* reconnect refreshes the session */
+      }
+    });
     source.addEventListener('presence', (event) => {
       if (active) {
         try {
@@ -99,12 +136,31 @@ export default function App() {
     source.onerror = () => {
       if (!active) return;
       setConnected(false);
-      api('/session').catch((error) => {
-        if (active && error instanceof ApiError && error.status === 401) {
-          source.close();
-          setNeedsJoin(true);
-        }
-      });
+      api<{ user: User }>('/session')
+        .then((session) => {
+          applyUser(session.user);
+          return api<Workspace>('/state');
+        })
+        .then((next) => {
+          if (active) setWorkspace(next);
+        })
+        .catch((error) => {
+          if (active && error instanceof ApiError && error.status === 401) {
+            source.close();
+            if (user.email) {
+              setWorkspace({ projects: [], cards: [] });
+              setEditor(undefined);
+              setDetails(undefined);
+              setProjectForm(undefined);
+              setDialog(undefined);
+              setSecurityOpen(false);
+              setReceivedState(false);
+              localStorage.removeItem('ddd-name');
+              localStorage.removeItem('ddd-project');
+              setUser(null);
+            } else setNeedsJoin(true);
+          }
+        });
     };
     return () => {
       active = false;
@@ -118,6 +174,22 @@ export default function App() {
   }, [projectId]);
   const project =
     workspace.projects.find((p) => p.id === projectId) || workspace.projects[0];
+  const official = Boolean(user?.email);
+  const canEdit =
+    !official || ['admin', 'editor'].includes(project?.role || '');
+  const canManage = !official || project?.role === 'admin';
+  useEffect(() => {
+    if (!official) return;
+    if (
+      editor &&
+      !workspace.projects.some(
+        (p) => p.id === editor.projectId && p.role !== 'viewer',
+      )
+    )
+      setEditor(undefined);
+    if (details && !workspace.cards.some((c) => c.id === details.id))
+      setDetails(undefined);
+  }, [official, workspace, editor, details]);
   const projectCards = workspace.cards.filter(
     (c) => c.projectId === project?.id,
   );
@@ -137,7 +209,7 @@ export default function App() {
     setNotice(message);
   }
   async function patch(card: Card, change: Partial<Card>) {
-    if (!connected || pendingRef.current.has(card.id)) return;
+    if (!canEdit || !connected || pendingRef.current.has(card.id)) return;
     pendingRef.current.add(card.id);
     setPending(new Set(pendingRef.current));
     setWorkspace((current) => ({
@@ -187,7 +259,7 @@ export default function App() {
     }
   }
   async function move(card: Card, direction: -1 | 1) {
-    if (!connected || pendingRef.current.has(card.id)) return;
+    if (!canEdit || !connected || pendingRef.current.has(card.id)) return;
     pendingRef.current.add(card.id);
     setPending(new Set(pendingRef.current));
     try {
@@ -208,6 +280,14 @@ export default function App() {
     try {
       await api('/session', 'DELETE');
       setUser(null);
+      localStorage.removeItem('ddd-name');
+      localStorage.removeItem('ddd-project');
+      setProjectId('');
+      setEditor(undefined);
+      setDetails(undefined);
+      setProjectForm(undefined);
+      setDialog(undefined);
+      setSecurityOpen(false);
       setReceivedState(false);
       setWorkspace({ projects: [], cards: [] });
     } catch (error) {
@@ -325,11 +405,28 @@ export default function App() {
           워크숍 사용 가이드
           <ArrowUpMini />
         </button>
+        {user.siteAdmin && (
+          <button
+            className="guide-button"
+            onClick={() => setSecurityOpen(true)}
+          >
+            <Settings2 size={17} />
+            계정과 감사 기록
+          </button>
+        )}
         <div className="sidebar-user">
           <span className="avatar">{user.name.slice(0, 1)}</span>
           <div>
             <strong>{user.name}</strong>
-            <span>워크숍 참여자</span>
+            <span>
+              {official
+                ? project?.role === 'admin'
+                  ? '프로젝트 관리자'
+                  : project?.role === 'editor'
+                    ? '편집자'
+                    : '조회자'
+                : '워크숍 참여자'}
+            </span>
           </div>
           <button
             className="icon-button"
@@ -353,7 +450,7 @@ export default function App() {
             <span>프로젝트</span>
             <span className="breadcrumb-slash">/</span>
             <strong>{project?.name || '새로운 워크숍'}</strong>
-            {project && (
+            {project && canManage && (
               <button
                 className="icon-button project-settings"
                 aria-label="프로젝트 설정"
@@ -384,7 +481,13 @@ export default function App() {
               onClick={() => setDialog('share')}
             >
               <Share2 size={15} />
-              <span>초대하기</span>
+              <span>
+                {official
+                  ? canManage
+                    ? '멤버 관리'
+                    : '접속 주소'
+                  : '초대하기'}
+              </span>
             </button>
           </div>
         </header>
@@ -499,7 +602,7 @@ export default function App() {
                   <button
                     className="button primary"
                     aria-label="카드 추가"
-                    disabled={!connected}
+                    disabled={!canEdit || !connected}
                     onClick={() => setEditor({ stage, projectId: project.id })}
                   >
                     <Plus size={16} />
@@ -515,12 +618,15 @@ export default function App() {
                 filter={filter}
                 connected={connected}
                 pending={pending}
+                readOnly={!canEdit}
                 onEdit={(card) =>
-                  setEditor({
-                    card,
-                    stage: card.stage,
-                    projectId: card.projectId,
-                  })
+                  canEdit
+                    ? setEditor({
+                        card,
+                        stage: card.stage,
+                        projectId: card.projectId,
+                      })
+                    : setDetails(card)
                 }
                 onAdd={(kind) =>
                   setEditor({ stage, kind, projectId: project.id })
@@ -613,7 +719,24 @@ export default function App() {
           }}
         />
       )}
-      {dialog && (
+      {details && (
+        <CardDetails
+          card={workspace.cards.find((c) => c.id === details.id) || details}
+          onClose={() => setDetails(undefined)}
+        />
+      )}
+      {securityOpen && (
+        <SecurityDialog user={user} onClose={() => setSecurityOpen(false)} />
+      )}
+      {dialog && official && dialog !== 'export' && (
+        <AccessDialog
+          key={`${project?.id}-${dialog}`}
+          mode={dialog}
+          project={project}
+          onClose={() => setDialog(undefined)}
+        />
+      )}
+      {dialog && (!official || dialog === 'export') && (
         <ShareDialog
           mode={dialog}
           project={project}

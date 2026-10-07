@@ -6,6 +6,7 @@ try {
   const server = createMcpServer({
     url: process.env.DDD_URL || 'http://127.0.0.1:3210',
     code: process.env.DDD_CODE,
+    token: process.env.DDD_TOKEN,
     readOnly,
     name: process.env.DDD_AI_NAME || 'AI 도우미',
   });

@@ -4,6 +4,13 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { resolve, sep, extname } from 'node:path';
 import { networkInterfaces } from 'node:os';
 import { openStore, record, seedSample } from './store.mjs';
+import { createIdentity, validateAuthConfig } from './identity.mjs';
+import {
+  securityOptions,
+  FixedWindowLimiter,
+  transportSecurity,
+  rejectRateLimit,
+} from './security.mjs';
 
 const kinds = {
   discovery: ['problem', 'actor', 'term'],
@@ -13,7 +20,6 @@ const kinds = {
   tasks: ['task'],
 };
 const limits = { name: 120, title: 200, description: 20000, detail: 20000 };
-const sessionLifetime = 12 * 60 * 60 * 1000;
 const comparePosition = (a, b) =>
   a.position - b.position || a.id.localeCompare(b.id);
 function fail(status, error, current) {
@@ -221,8 +227,16 @@ export async function createApp({
   port = 0,
   publicUrl,
   mcpContainerName,
+  security,
+  auth = { mode: 'legacy' },
+  serviceMode = 'workshop',
 }) {
-  if (!dataDir || typeof code !== 'string' || !code)
+  const safeguards = securityOptions(security);
+  validateAuthConfig(auth, serviceMode, publicUrl);
+  if (
+    !dataDir ||
+    (auth.mode === 'legacy' && (typeof code !== 'string' || !code))
+  )
     throw new Error('dataDir 및 code가 필요합니다.');
   if (publicUrl) {
     let url;
@@ -246,11 +260,15 @@ export async function createApp({
   )
     throw new Error('MCP_CONTAINER_NAME이 올바르지 않습니다.');
   const publicAddress = publicUrl ? new URL(publicUrl) : undefined;
+  const apiLimiter = new FixedWindowLimiter(safeguards.apiRate),
+    loginLimiter = new FixedWindowLimiter(safeguards.loginRate),
+    writeLimiter = new FixedWindowLimiter(safeguards.writeRate);
   const store = openStore(dataDir),
     sessions = new Map(),
     clients = new Set();
-  let closing;
+  let closing, identity;
   const session = (req) => {
+    if (identity) return identity.session(req);
     const token = req.headers.cookie
       ?.split(';')
       .map((c) => c.trim())
@@ -261,39 +279,115 @@ export async function createApp({
     if (item) clearSession(token);
     return null;
   };
-  const emit = (client, name, value) =>
-    client.res.write(`event: ${name}\ndata: ${JSON.stringify(value)}\n\n`);
+  const frame = (name, value) =>
+    `event: ${name}\ndata: ${JSON.stringify(value)}\n\n`;
+  function disconnect(client) {
+    client.closing = true;
+    // Destroy queued bytes and the socket; end() can leave a paused peer alive.
+    // The close handler releases capacity only after the response closes.
+    client.res.destroy();
+  }
+  function send(client, output) {
+    if (client.closing || client.res.destroyed) return;
+    // Reserve chunk framing bytes as well as the application's event payload.
+    if (
+      client.res.writableLength + Buffer.byteLength(output) + 32 >
+      safeguards.maxSseBufferBytes
+    ) {
+      disconnect(client);
+      return;
+    }
+    client.res.write(output);
+  }
+  const emit = (client, name, value) => send(client, frame(name, value));
+  function live(client) {
+    if (!identity) return sessions.has(client.token) && !client.closing;
+    const current = identity.credential(client.token, false, false);
+    if (!current) {
+      disconnect(client);
+      return false;
+    }
+    client.user = current.user;
+    client.signed = current;
+    return !client.closing;
+  }
   function presence() {
-    const unique = new Map();
-    for (const c of clients)
-      if (sessions.has(c.token)) unique.set(c.user.id, c.user);
-    const people = [...unique.values()];
-    for (const client of clients) emit(client, 'presence', people);
+    const active = [...clients].filter(live);
+    for (const viewer of active) {
+      const ids = identity
+        ? new Set(identity.state(viewer.signed).projects.map((p) => p.id))
+        : null;
+      const unique = new Map();
+      for (const other of active) {
+        if (
+          !identity ||
+          other.user.id === viewer.user.id ||
+          identity.state(other.signed).projects.some((p) => ids.has(p.id))
+        )
+          unique.set(other.user.id, {
+            id: other.user.id,
+            name: other.user.name,
+          });
+      }
+      emit(viewer, 'presence', [...unique.values()]);
+    }
   }
   function broadcast() {
-    const state = store.state();
-    for (const client of clients) emit(client, 'state', state);
+    const output = identity ? null : frame('state', store.state());
+    for (const client of clients) {
+      if (!live(client)) continue;
+      if (identity) emit(client, 'user', client.user);
+      send(client, output || frame('state', identity.state(client.signed)));
+    }
   }
   function clearSession(token) {
     sessions.delete(token);
+    writeLimiter.delete(token);
     for (const client of clients)
-      if (client.token === token) {
-        clients.delete(client);
-        client.res.end();
-      }
+      if (client.token === token) disconnect(client);
     presence();
   }
+  function pruneSessions() {
+    if (identity) {
+      identity.prune();
+      for (const client of clients) live(client);
+    }
+    for (const [token, value] of sessions)
+      if (value.expiresAt <= Date.now()) clearSession(token);
+  }
+  if (auth.mode === 'oidc') {
+    try {
+      identity = await createIdentity({
+        store,
+        auth,
+        publicUrl,
+        safeguards,
+        onChange(targetId) {
+          if (targetId)
+            for (const c of clients) if (c.user.id === targetId) disconnect(c);
+          broadcast();
+          presence();
+        },
+      });
+    } catch (error) {
+      store.close();
+      throw error;
+    }
+  }
   const server = createServer(async (req, res) => {
-    res.setHeader('x-content-type-options', 'nosniff');
-    res.setHeader('referrer-policy', 'same-origin');
+    const requestId = randomUUID();
+    res.setHeader('x-request-id', requestId);
+    let auditSigned;
+
+    const { secureRequest, requestOrigin } = transportSecurity(
+      req,
+      res,
+      publicAddress,
+    );
     try {
       const url = new URL(req.url, 'http://localhost'),
         path = url.pathname,
         method = req.method;
-      const secureRequest =
-        publicAddress?.protocol === 'https:' &&
-        (req.headers.host === publicAddress.host ||
-          req.headers.origin === publicAddress.origin);
       const secureCookie = secureRequest ? '; Secure' : '';
       if (!path.startsWith('/api/')) {
         if (!['GET', 'HEAD'].includes(method) || !staticDir)
@@ -343,22 +437,69 @@ export async function createApp({
         res.end(method === 'HEAD' ? undefined : await readFile(file));
         return;
       }
+      const peer = req.socket.remoteAddress || 'unknown';
+      pruneSessions();
+      let validOrigin = true;
       if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && req.headers.origin) {
-        let origin;
         try {
-          origin = new URL(req.headers.origin);
+          const origin = new URL(req.headers.origin);
+          validOrigin =
+            origin.origin === req.headers.origin &&
+            (origin.origin === requestOrigin ||
+              origin.origin === publicAddress?.origin);
         } catch {
-          fail(403, '다른 사이트의 변경 요청은 허용하지 않습니다.');
+          validOrigin = false;
         }
-        if (
-          origin.origin !== `http://${req.headers.host}` &&
-          origin.origin !== publicAddress?.origin
-        )
-          fail(403, '다른 사이트의 변경 요청은 허용하지 않습니다.');
       }
       const signed = session(req);
-      if (path === '/api/session') {
+      auditSigned = signed;
+      const loggingOut =
+        signed && validOrigin && path === '/api/session' && method === 'DELETE';
+      // Revocation must remain available when quotas are exhausted. Only an
+      // authenticated logout with an allowed origin receives this exemption.
+      const apiRetry = loggingOut ? 0 : apiLimiter.consume(peer);
+      if (apiRetry) rejectRateLimit(apiRetry);
+      if (!validOrigin)
+        fail(403, '다른 사이트의 변경 요청은 허용하지 않습니다.');
+      if (
+        signed &&
+        !loggingOut &&
+        !['GET', 'HEAD', 'OPTIONS'].includes(method) &&
+        !(path === '/api/session' && method === 'POST')
+      ) {
+        const writeRetry = writeLimiter.consume(signed.token);
+        if (writeRetry) rejectRateLimit(writeRetry);
+      }
+      if (path === '/api/auth/config' && method === 'GET') {
+        json(res, 200, {
+          mode: auth.mode,
+          ...(identity ? { loginUrl: '/api/auth/login' } : {}),
+        });
+        return;
+      }
+      if (identity) {
+        if (path === '/api/auth/login' || path === '/api/auth/callback') {
+          const retry = loginLimiter.consume(peer);
+          if (retry) rejectRateLimit(retry);
+        }
+        if (
+          await identity.routes({
+            path,
+            method,
+            req,
+            res,
+            signed,
+            requestId,
+            body,
+            json,
+          })
+        )
+          return;
+      }
+      if (!identity && path === '/api/session') {
         if (method === 'POST') {
+          const loginRetry = loginLimiter.consume(peer);
+          if (loginRetry) rejectRateLimit(loginRetry);
           const value = await body(req);
           allowed(value, ['name', 'code']);
           const name = text(value.name, '이름', 60, true);
@@ -371,19 +512,25 @@ export async function createApp({
             !timingSafeEqual(supplied, expected)
           )
             fail(401, '접속 코드가 올바르지 않습니다.');
+          pruneSessions();
+          if (
+            sessions.size >= safeguards.maxSessions &&
+            !sessions.has(signed?.token)
+          )
+            rejectRateLimit();
           if (signed) clearSession(signed.token);
           const token = randomBytes(32).toString('hex'),
             user = { id: randomUUID(), name };
           sessions.set(token, {
             user,
-            expiresAt: Date.now() + sessionLifetime,
+            expiresAt: Date.now() + safeguards.sessionLifetimeMs,
           });
           json(
             res,
             200,
             { user },
             {
-              'set-cookie': `ddd_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${sessionLifetime / 1000}${secureCookie}`,
+              'set-cookie': `ddd_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.max(1, Math.floor(safeguards.sessionLifetimeMs / 1000))}${secureCookie}`,
             },
           );
           return;
@@ -408,11 +555,26 @@ export async function createApp({
       }
       if (!signed) fail(401, '먼저 접속해 주세요.');
       const user = signed.user;
+      const authorize = (projectId, minimum = 'viewer', human = false) => {
+        if (!identity) return;
+        if (human) identity.human(signed);
+        identity.project(signed, projectId, minimum);
+      };
+      const auditChange = (event, projectId, targetId) =>
+        identity?.audit(
+          requestId,
+          signed,
+          event,
+          'success',
+          projectId,
+          targetId,
+        );
       if (path === '/api/state' && method === 'GET') {
-        json(res, 200, store.state());
+        json(res, 200, identity ? identity.state(signed) : store.state());
         return;
       }
       if (path === '/api/info' && method === 'GET') {
+        identity?.human(signed);
         json(res, 200, {
           urls: shareUrls(
             host,
@@ -435,7 +597,7 @@ export async function createApp({
                     '-e',
                     'DDD_URL',
                     '-e',
-                    'DDD_CODE',
+                    identity ? 'DDD_TOKEN' : 'DDD_CODE',
                     '-e',
                     'DDD_READ_ONLY',
                     '-e',
@@ -448,7 +610,7 @@ export async function createApp({
             ],
             env: {
               DDD_URL: `http://${host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host.includes(':') ? `[${host}]` : host}:${server.address().port}`,
-              DDD_CODE: code,
+              ...(identity ? { DDD_TOKEN: '' } : { DDD_CODE: code }),
               DDD_AI_NAME: 'AI 도우미',
             },
           },
@@ -456,6 +618,32 @@ export async function createApp({
         return;
       }
       if (path === '/api/events' && method === 'GET') {
+        identity?.human(signed);
+        const sessionStreams = [...clients].filter(
+          (client) => client.token === signed.token,
+        ).length;
+        if (
+          clients.size >= safeguards.maxSseClients ||
+          sessionStreams >= safeguards.maxSsePerSession
+        )
+          rejectRateLimit();
+        const initial = frame(
+          'state',
+          identity ? identity.state(signed) : store.state(),
+        );
+        if (Buffer.byteLength(initial) + 32 > safeguards.maxSseBufferBytes)
+          fail(413, '현재 보드가 실시간 연결의 출력 한도를 초과했습니다.');
+        const client = {
+          res,
+          user,
+          token: signed.token,
+          signed,
+          closing: false,
+        };
+        res.on('close', () => {
+          if (clients.delete(client)) presence();
+        });
+        clients.add(client);
         res.writeHead(200, {
           'content-type': 'text/event-stream; charset=utf-8',
           'cache-control': 'no-cache, no-transform',
@@ -463,13 +651,8 @@ export async function createApp({
           'x-accel-buffering': 'no',
         });
         res.flushHeaders();
-        const client = { res, user, token: signed.token };
-        clients.add(client);
-        emit(client, 'state', store.state());
+        send(client, initial);
         presence();
-        res.on('close', () => {
-          if (clients.delete(client)) presence();
-        });
         return;
       }
       if (path === '/api/projects' && method === 'POST') {
@@ -483,12 +666,17 @@ export async function createApp({
           );
         if (value.sample !== undefined && typeof value.sample !== 'boolean')
           fail(400, '예제 여부가 올바르지 않습니다.');
-        const project = value.sample
-          ? store.transaction(() =>
-              seedSample(store, user.name, name, description),
-            )
-          : record({ name, description }, user.name);
-        if (!value.sample) store.saveProject(project);
+        identity?.human(signed);
+        if (identity) identity.refresh(signed);
+        const project = store.transaction(() => {
+          const created = value.sample
+            ? seedSample(store, user.name, name, description)
+            : record({ name, description }, user.name);
+          if (!value.sample) store.saveProject(created);
+          identity?.addAdmin(signed, created.id);
+          auditChange('project.create', created.id, created.id);
+          return created;
+        });
         broadcast();
         json(res, 201, project);
         return;
@@ -498,6 +686,7 @@ export async function createApp({
         (match = path.match(/^\/api\/projects\/([^/]+)\/export$/)) &&
         method === 'GET'
       ) {
+        authorize(match[1]);
         const project = store.project(match[1]);
         if (!project) fail(404, '프로젝트를 찾을 수 없습니다.');
         const format = url.searchParams.get('format') || 'json';
@@ -515,6 +704,7 @@ export async function createApp({
           'content-disposition': `attachment; filename="${filename}"`,
           'cache-control': 'no-store',
         });
+        auditChange('project.export', project.id, project.id);
         res.end(
           format === 'json'
             ? JSON.stringify({ project, cards }, null, 2)
@@ -527,10 +717,14 @@ export async function createApp({
         method === 'POST'
       ) {
         const value = await body(req);
+        authorize(match[1], 'editor');
         if (!store.project(match[1])) fail(404, '프로젝트를 찾을 수 없습니다.');
         const fields = cardFields(value, match[1], store);
         const card = record({ projectId: match[1], ...fields }, user.name);
-        store.saveCard(card);
+        store.transaction(() => {
+          store.saveCard(card);
+          auditChange('card.change', card.projectId, card.id);
+        });
         broadcast();
         json(res, 201, card);
         return;
@@ -540,6 +734,7 @@ export async function createApp({
         ['PATCH', 'DELETE'].includes(method)
       ) {
         const value = await body(req);
+        authorize(match[1], 'admin', true);
         const current = store.project(match[1]);
         if (!current) fail(404, '프로젝트를 찾을 수 없습니다.');
         allowed(
@@ -550,7 +745,10 @@ export async function createApp({
         );
         revision(value, current);
         if (method === 'DELETE') {
-          store.deleteProject(current.id);
+          store.transaction(() => {
+            store.deleteProject(current.id);
+            auditChange('project.delete', current.id, current.id);
+          });
           broadcast();
           json(res, 200, { ok: true });
           return;
@@ -574,7 +772,10 @@ export async function createApp({
           },
           user,
         );
-        store.saveProject(project);
+        store.transaction(() => {
+          store.saveProject(project);
+          auditChange('project.change', project.id, project.id);
+        });
         broadcast();
         json(res, 200, project);
         return;
@@ -587,6 +788,7 @@ export async function createApp({
         allowed(value, ['revision', 'direction']);
         const current = store.card(match[1]);
         if (!current) fail(404, '카드를 찾을 수 없습니다.');
+        authorize(current.projectId, 'editor');
         revision(value, current);
         if (value.direction !== -1 && value.direction !== 1)
           fail(400, '이동 방향은 -1 또는 1이어야 합니다.');
@@ -609,14 +811,16 @@ export async function createApp({
           siblings[neighbor],
           siblings[index],
         ];
-        const cards = store.transaction(() =>
-          siblings.map((card, position) => {
+        const cards = store.transaction(() => {
+          const movedCards = siblings.map((card, position) => {
             if (card.position === position) return card;
             const moved = changed(card, { position }, user);
             store.saveCard(moved);
             return moved;
-          }),
-        );
+          });
+          auditChange('card.move', current.projectId, current.id);
+          return movedCards;
+        });
         broadcast();
         json(res, 200, { cards });
         return;
@@ -628,6 +832,7 @@ export async function createApp({
         const value = await body(req);
         const current = store.card(match[1]);
         if (!current) fail(404, '카드를 찾을 수 없습니다.');
+        authorize(current.projectId, 'editor');
         if (method === 'DELETE') {
           allowed(value, ['revision']);
           revision(value, current);
@@ -638,6 +843,7 @@ export async function createApp({
                 .cards.filter((c) => c.contextId === current.id))
                 store.saveCard(changed(card, { contextId: null }, user));
             store.deleteCard(current.id);
+            auditChange('card.delete', current.projectId, current.id);
           });
           broadcast();
           json(res, 200, { ok: true });
@@ -655,7 +861,10 @@ export async function createApp({
         revision(value, current);
         const fields = cardFields(value, current.projectId, store, current);
         const card = changed(current, fields, user);
-        store.saveCard(card);
+        store.transaction(() => {
+          store.saveCard(card);
+          auditChange('card.change', card.projectId, card.id);
+        });
         broadcast();
         json(res, 200, card);
         return;
@@ -663,20 +872,37 @@ export async function createApp({
       fail(404, '요청한 항목을 찾을 수 없습니다.');
     } catch (error) {
       if (!res.headersSent) {
-        if (!error.status) console.error(error);
-        json(res, error.status || 500, {
-          error: error.status ? error.message : '서버에서 오류가 발생했습니다.',
-          ...(error.current ? { current: error.current } : {}),
-        });
+        if (!error.status) console.error('server_error', requestId);
+        if (identity && !closing && [401, 403, 404, 429].includes(error.status))
+          identity.audit(
+            requestId,
+            auditSigned,
+            error.status === 429 ? 'request.limit' : 'request.denied',
+            'failure',
+          );
+        json(
+          res,
+          error.status || 500,
+          {
+            error: error.status
+              ? error.message
+              : '서버에서 오류가 발생했습니다.',
+            ...(error.current ? { current: error.current } : {}),
+          },
+          error.retryAfter ? { 'retry-after': String(error.retryAfter) } : {},
+        );
       } else res.end();
     }
   });
   server.requestTimeout = 30000;
   server.headersTimeout = 15000;
   const heartbeat = setInterval(() => {
-    for (const [token, value] of sessions)
-      if (value.expiresAt <= Date.now()) clearSession(token);
-    for (const client of clients) client.res.write(': heartbeat\n\n');
+    pruneSessions();
+    apiLimiter.prune();
+    loginLimiter.prune();
+    writeLimiter.prune();
+    for (const client of clients)
+      if (live(client)) send(client, ': heartbeat\n\n');
   }, 15000);
   heartbeat.unref();
   try {
@@ -697,8 +923,7 @@ export async function createApp({
     close() {
       if (closing) return closing;
       clearInterval(heartbeat);
-      for (const client of clients) client.res.end();
-      clients.clear();
+      for (const client of clients) disconnect(client);
       sessions.clear();
       closing = new Promise((resolve, reject) => {
         server.close((error) => {

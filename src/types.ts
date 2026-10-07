@@ -11,11 +11,15 @@ export type Kind =
   | 'context'
   | 'aggregate'
   | 'task';
+export type ProjectRole = 'admin' | 'editor' | 'viewer';
 export interface User {
+  email?: string;
+  siteAdmin?: boolean;
   id: string;
   name: string;
 }
 export interface Project {
+  role?: ProjectRole;
   id: string;
   name: string;
   description: string;

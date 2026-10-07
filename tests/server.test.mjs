@@ -67,7 +67,8 @@ async function stream(base, cookie) {
         }
       }
     } catch (error) {
-      if (error.name !== 'AbortError') throw error;
+      if (error.name !== 'AbortError' && error.cause?.code !== 'UND_ERR_SOCKET')
+        throw error;
     }
   })();
   return {
@@ -619,6 +620,8 @@ test('CLI saves a private access code, respects ACCESS_CODE, and initializes dem
         HOST: '127.0.0.1',
         PORT: '0',
         ACCESS_CODE: '',
+        SERVICE_MODE: 'workshop',
+        AUTH_MODE: 'legacy',
         ...env,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -653,7 +656,8 @@ test('CLI saves a private access code, respects ACCESS_CODE, and initializes dem
   const code = (await readFile(join(dataDir, 'access-code'), 'utf8')).trim();
   assert.ok(code.length >= 20);
   assert.equal((await stat(join(dataDir, 'access-code'))).mode & 0o777, 0o600);
-  assert.ok(first.output.includes(code));
+  assert.equal(first.output.includes(code), false);
+  assert.ok(first.output.includes(join(dataDir, 'access-code')));
   const loginResponse = await fetch(first.base + '/api/session', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -881,7 +885,11 @@ test('expired sessions reject requests and also close their active event streams
   let timer;
   const closed = await Promise.race([
     (async () => {
-      while (!(await reader.read()).done) {}
+      try {
+        while (!(await reader.read()).done) {}
+      } catch (error) {
+        assert.equal(error.cause?.code, 'UND_ERR_SOCKET');
+      }
       return true;
     })(),
     new Promise((resolve) => {

@@ -17,6 +17,7 @@ export default function Board({
   query,
   connected,
   pending,
+  readOnly = false,
   onEdit,
   onAdd,
   onPatch,
@@ -29,6 +30,7 @@ export default function Board({
   query: string;
   connected: boolean;
   pending: Set<string>;
+  readOnly?: boolean;
   onEdit: (card: Card) => void;
   onAdd: (kind?: Kind) => void;
   onPatch: (card: Card, patch: Partial<Card>) => void;
@@ -65,7 +67,7 @@ export default function Board({
               aria-label={`작업 완료: ${card.title}`}
               type="checkbox"
               checked={done}
-              disabled={!connected || pending.has(card.id)}
+              disabled={readOnly || !connected || pending.has(card.id)}
               onChange={(e) =>
                 onPatch(card, {
                   data: { ...card.data, done: e.target.checked },
@@ -80,7 +82,7 @@ export default function Board({
         </div>
         <button
           className="card-content"
-          aria-label={`카드 편집: ${card.title}`}
+          aria-label={`${readOnly ? '카드 보기' : '카드 편집'}: ${card.title}`}
           onClick={() => onEdit(card)}
         >
           <h3>{card.title}</h3>
@@ -124,7 +126,10 @@ export default function Board({
             <button
               aria-label={`위로 이동: ${card.title}`}
               disabled={
-                !connected || pending.size > 0 || siblings.indexOf(card) === 0
+                readOnly ||
+                !connected ||
+                pending.size > 0 ||
+                siblings.indexOf(card) === 0
               }
               onClick={() => onMove(card, -1)}
             >
@@ -133,6 +138,7 @@ export default function Board({
             <button
               aria-label={`아래로 이동: ${card.title}`}
               disabled={
+                readOnly ||
                 !connected ||
                 pending.size > 0 ||
                 siblings.indexOf(card) === siblings.length - 1
@@ -176,7 +182,7 @@ export default function Board({
                 <button
                   className="column-add icon-button"
                   aria-label={`${meta.label} 추가`}
-                  disabled={!connected}
+                  disabled={readOnly || !connected}
                   onClick={() => onAdd(kind)}
                 >
                   <Plus size={16} />
@@ -199,7 +205,7 @@ export default function Board({
               <button
                 className="add-card-inline"
                 aria-label={`${meta.label} 카드 추가`}
-                disabled={!connected}
+                disabled={readOnly || !connected}
                 onClick={() => onAdd(kind)}
               >
                 <Plus size={15} />
@@ -251,7 +257,7 @@ export default function Board({
                     <select
                       aria-label={`컨텍스트 분류: ${c.title}`}
                       value={c.contextId || ''}
-                      disabled={!connected || pending.has(c.id)}
+                      disabled={readOnly || !connected || pending.has(c.id)}
                       onChange={(e) =>
                         onPatch(c, { contextId: e.target.value || null })
                       }

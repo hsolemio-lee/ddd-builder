@@ -7,12 +7,21 @@ services:
     container_name: ${DDD_CONTAINER_NAME:-ddd-builder}
     init: true
     restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 128
     ports:
-      - '${DDD_BIND_ADDRESS:-0.0.0.0}:${DDD_PORT:-3210}:3210'
+      - '${DDD_BIND_ADDRESS:-127.0.0.1}:${DDD_PORT:-3210}:3210'
     environment:
       HOST: 0.0.0.0
       PORT: '3210'
       DATA_DIR: /app/data
+      SERVICE_MODE: ${SERVICE_MODE:-production}
+      AUTH_MODE: ${AUTH_MODE:-oidc}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OWNER_EMAIL: ${OWNER_EMAIL:-}
       ACCESS_CODE: ${ACCESS_CODE:-}
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:${DDD_PORT:-3210}}
       MCP_CONTAINER_NAME: ${DDD_CONTAINER_NAME:-ddd-builder}
@@ -21,6 +30,8 @@ services:
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
     security_opt:
       - no-new-privileges:true
     healthcheck:

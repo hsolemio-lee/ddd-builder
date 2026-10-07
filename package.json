@@ -10,7 +10,7 @@
     "dev": "node scripts/dev.mjs",
     "build": "tsc -b && vite build",
     "start": "node server/index.mjs",
-    "test": "node --test tests/server.test.mjs tests/mcp.test.mjs",
+    "test": "node --test tests/server.test.mjs tests/mcp.test.mjs tests/security.test.mjs tests/auth.test.mjs",
     "mcp": "node mcp/index.mjs",
     "test:e2e": "playwright test",
     "test:docker": "node --test tests/docker.test.mjs",
@@ -19,6 +19,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
     "lucide-react": "^0.577.0",
+    "openid-client": "^6.8.8",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "zod": "^4.6.5"
