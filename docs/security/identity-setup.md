@@ -12,7 +12,11 @@
 - 관리자: 운영자가 소유하고 이메일 검증과 MFA를 완료한 계정
 - 테스트 공급자는 운영과 다른 client ID와 비밀키 사용
 
-client secret은 채팅이나 Git에 올리지 않는다. 로컬의 Git 제외 환경 파일 또는 배포 플랫폼의 비밀 저장소에 입력한다. 운영 환경 변수의 정확한 이름과 실행 명령은 인증 구현 완료 시 이 문서에 추가한다.
+client secret은 채팅이나 Git에 올리지 않는다. 로컬의 Git 제외 환경 파일 또는 배포 플랫폼의 비밀 저장소에 입력한다. 운영 환경 변수는 `SERVICE_MODE=production`, `AUTH_MODE=oidc`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OWNER_EMAIL`, `PUBLIC_URL`이다. `.env.example`를 복사한 `.env`에 입력하고 파일 권한을 `chmod 600 .env`로 제한한다.
+
+Google을 사용하는 경우 [Google 공식 OIDC 문서](https://developers.google.com/identity/openid-connect/openid-connect)를 따라 Cloud Console에서 Web application OAuth 클라이언트를 생성한다. issuer는 `https://accounts.google.com`이다. 승인된 redirect URI를 위 주소와 정확하게 일치시킨다. 공급자 측 앱 공개 범위와 동의 화면도 실제 이용 대상에 맞춰 설정한다.
+
+전환 준비를 마친 뒤 `docker compose up -d --build --wait`로 적용한다. 별도 복제 볼륨에서 먼저 실제 관리자 로그인을 확인한다. 운영 볼륨에는 확인되지 않은 테스트 공급자를 연결하지 않는다.
 
 최초 관리자 등록은 검증된 이메일을 기준으로 최초 1회만 허용하고 이후에는 공급자 issuer와 subject에 묶는다. 계정의 이메일이 같아도 다른 issuer 또는 subject를 기존 관리자와 자동으로 연결하지 않는다. 기존 프로젝트의 소유권 이전은 이 등록 시 한 번만 수행하며 카드는 보존한다.
 

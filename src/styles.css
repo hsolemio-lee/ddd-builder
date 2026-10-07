@@ -2497,3 +2497,57 @@ a svg {
     scroll-behavior: auto !important;
   }
 }
+
+.access-dialog h4 {
+  margin: 24px 0 10px;
+}
+.access-form {
+  margin: 20px 0;
+}
+.access-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border, #e4e7e5);
+}
+.access-row > div {
+  flex: 1;
+  min-width: 160px;
+  overflow-wrap: anywhere;
+}
+.access-row small,
+.audit-row small {
+  display: block;
+  color: var(--muted, #6e7a75);
+  margin-top: 4px;
+}
+.access-row select,
+.access-form select {
+  padding: 8px;
+  border: 1px solid #dce3df;
+  border-radius: 8px;
+  background: white;
+}
+.audit-list {
+  max-height: 320px;
+  overflow: auto;
+}
+.audit-row {
+  padding: 12px 0;
+  border-bottom: 1px solid #e4e7e5;
+}
+.audit-row code {
+  display: block;
+  font-size: 11px;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+.card-details p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.generated-token {
+  margin: 20px 0;
+}

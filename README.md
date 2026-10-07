@@ -4,11 +4,11 @@
 
 ## Docker Compose로 바로 실행하기
 
-Docker Desktop 또는 Docker Engine과 Compose가 실행 중이면, 호스트에 Node나 SQLite를 설치하지 않고 시작할 수 있습니다.
+Docker Desktop 또는 Docker Engine과 Compose가 실행 중이면, 호스트에 Node나 SQLite를 설치하지 않고 시작할 수 있습니다. 기본 배포는 개인 계정 설정을 요구하는 공식 운영 모드입니다. 먼저 아래의 공식 서비스 인증 설정을 완료하세요. 설정 전 제한된 워크숍을 확인하려면 명시적으로 개발 모드를 선택합니다.
 
 ```sh
-docker compose up -d --build --wait
-docker exec ddd-builder cat /app/data/access-code
+SERVICE_MODE=workshop AUTH_MODE=legacy docker compose up -d --build --wait
+docker exec ddd-builder node -e "process.stdout.write(require('node:fs').readFileSync('/app/data/access-code','utf8'))"
 ```
 
 `http://localhost:3210`을 열고 두 번째 명령으로 읽은 접속 코드를 입력합니다. 서버 로그에는 접속 코드를 기록하지 않습니다. 컨테이너 이름을 변경했다면 `docker exec`의 `ddd-builder`도 해당 이름으로 바꿉니다. 첫 명령이 화면 빌드와 서버 실행을 모두 처리합니다. 프로젝트와 접속 코드는 `workshop-data` 이름의 Docker 볼륨에 저장되어 재시작·업데이트 뒤에도 유지됩니다.
@@ -56,10 +56,11 @@ Node 실행 방식에서 복사했던 MCP 설정은 새 설정으로 교체합�
 직접 실행의 `data/` 폴더와 Docker 볼륨은 별도 저장소입니다. 기존 데이터를 가져올 때는 기존 `npm start` 서버와 Compose 앱을 먼저 종료하고, 대상 Docker 볼륨이 비어 있는 상태에서 아래 명령을 실행합니다. 기존 볼륨에 이미 작업이 있다면 먼저 백업하고 다른 저장소로 보관하세요.
 
 ```sh
+docker compose create
 docker compose stop
-docker compose run --rm --no-deps --user root --entrypoint sh \
-  -v "$PWD/data:/source:ro" ddd-builder \
-  -c 'cp -a /source/. /app/data/ && chown -R node:node /app/data'
+docker run --rm --user root --volumes-from ddd-builder \
+  -v "$PWD/data:/source:ro" busybox:1.37.0 \
+  sh -c 'cp -a /source/. /app/data/ && chown -R 1000:1000 /app/data'
 docker compose up -d --wait
 ```
 
@@ -72,8 +73,8 @@ docker compose up -d --wait
 ```sh
 docker compose stop
 mkdir -p backups
-docker compose run --rm --no-deps --user root --entrypoint tar \
-  ddd-builder -czf - -C /app/data . > backups/ddd-builder-data.tar.gz
+docker run --rm --user root --volumes-from ddd-builder:ro \
+  busybox:1.37.0 tar -czf - -C /app/data . > backups/ddd-builder-data.tar.gz
 docker compose start
 ```
 
@@ -81,13 +82,13 @@ docker compose start
 
 ```sh
 docker compose stop
-docker compose run --rm -T --no-deps --user root --entrypoint sh \
-  ddd-builder -c 'rm -f /app/data/ddd-builder.sqlite /app/data/ddd-builder.sqlite-wal /app/data/ddd-builder.sqlite-shm; tar -xzf - -C /app/data && chown -R node:node /app/data' \
+docker run --rm -i --user root --volumes-from ddd-builder \
+  busybox:1.37.0 sh -c 'rm -f /app/data/ddd-builder.sqlite /app/data/ddd-builder.sqlite-wal /app/data/ddd-builder.sqlite-shm; tar -xzf - -C /app/data && chown -R 1000:1000 /app/data' \
   < backups/ddd-builder-data.tar.gz
 docker compose up -d --wait
 ```
 
-컨테이너는 일반 사용자로 실행하고, 앱 코드가 있는 파일 시스템은 읽기 전용입니다. 메모리 512 MiB, CPU 1개, 프로세스 128개로 제한하며 Docker Desktop에서도 적용됩니다. 위의 백업·복원 명령은 `--user root`로 저장 볼륨만 관리합니다. 앱 데이터는 저장 볼륨에 기록합니다. 기본 명명 규칙에서 볼륨 이름은 `ddd-builder_workshop-data`입니다. Compose 프로젝트 이름을 바꾸면 저장 볼륨도 해당 프로젝트 이름을 따릅니다.
+컨테이너는 일반 사용자로 실행하고, 앱 코드가 있는 파일 시스템은 읽기 전용입니다. 메모리 512 MiB, CPU 1개, 프로세스 128개로 제한하며 Docker Desktop에서도 적용됩니다. 위의 백업·복원 명령은 `--user root`로 저장 볼륨만 관리합니다. 앱 데이터는 저장 볼륨에 기록합니다. 실행 이미지는 Node 런타임과 앱만 담은 Distroless로 셸·npm·cat이 없습니다. 데이터 관리에는 별도의 일회용 BusyBox 컨테이너를 사용합니다. 기존 볼륨과의 호환을 위해 앱 UID/GID는 1000입니다. 기본 명명 규칙에서 볼륨 이름은 `ddd-builder_workshop-data`입니다. Compose 프로젝트 이름을 바꾸면 저장 볼륨도 해당 프로젝트 이름을 따릅니다.
 
 Compose의 환경 변수 설정 참고: [Docker 공식 문서](https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/).
 
@@ -260,3 +261,48 @@ npm run test:docker
 ```
 
 Node 테스트는 임시 폴더에서 실제 HTTP와 MCP 클라이언트를 사용해 인증, 보안 헤더, 요청·세션·SSE 한도, 저장 복구, 충돌, 동시 요청, 내보내기와 stdio 연결을 검증합니다. 브라우저 테스트는 별도 포트 `3211`과 `test-results/e2e-data`를 사용합니다.
+
+## 공식 서비스 인증과 보안
+
+기본 Compose 배포는 `production` 모드이며 OIDC 설정이 없으면 시작하지 않습니다. 명시적으로 선택하는 `workshop` 모드는 공유 코드 워크숍용입니다. 공식 서비스에서는 초대받은 개인의 OIDC 계정, 프로젝트별 관리자·편집자·조회자 권한, 감사 기록을 사용합니다. 읽기 전용 권한은 REST·내보내기·실시간 연결·MCP에서 모두 적용합니다.
+
+Git에서 제외된 `.env`에 다음 항목을 설정합니다. 비밀키를 채팅이나 저장소에 넣지 마세요.
+
+```dotenv
+SERVICE_MODE=production
+AUTH_MODE=oidc
+PUBLIC_URL=https://sol-macmini-2.tail6d02c8.ts.net
+DDD_BIND_ADDRESS=127.0.0.1
+OIDC_ISSUER=https://accounts.google.com
+OIDC_CLIENT_ID=공급자에서_발급한_Client_ID
+OIDC_CLIENT_SECRET=로컬에만_입력하는_비밀키
+OWNER_EMAIL=최초_관리자의_검증된_이메일
+```
+
+공급자에 등록할 redirect URI는 `https://sol-macmini-2.tail6d02c8.ts.net/api/auth/callback`입니다. 요청 범위는 `openid email profile`입니다. 서명된 ID 토큰에 `email_verified=true`를 제공하는 공급자가 필요합니다. Google 예시는 [인증 설정 가이드](docs/security/identity-setup.md)를 따릅니다.
+
+최초 관리자 로그인 때 기존 프로젝트를 해당 관리자에게 한 번만 귀속합니다. 기존 카드와 이력은 보존합니다. 이후에는 관리자 이메일이 같아도 다른 issuer/subject를 자동으로 연결하지 않으며, 재시작해도 철회한 프로젝트 권한을 되살리지 않습니다. 운영 모드의 인증 설정이 누락되거나 HTTPS가 아니면 서버는 시작하지 않습니다. 개발 모드로 자동 대체하지 않습니다.
+
+관리자는 **멤버 관리**에서 이메일·권한으로 초대를 등록하고 접속 주소를 직접 전달합니다. 초대는 7일 후 만료됩니다. 개인별 세션은 최대 12시간이고 30분간 요청이 없으면 만료됩니다. 마지막 활성 프로젝트/운영 관리자를 제거하려면 먼저 다른 관리자에게 권한을 이전해야 합니다.
+
+**외부 AI 연결**에서 프로젝트에 제한된 개인 MCP 토큰을 생성합니다. 기본은 읽기이고 최대 30일 후 만료됩니다. 토큰 원문은 생성할 때만 표시하며 서버에는 해시만 보관합니다. 조회자는 읽기 토큰만 생성할 수 있고, 쓰기 토큰도 해당 프로젝트 카드 편집으로 제한됩니다. 토큰 철회·계정 차단·프로젝트 권한 변경은 서버에서 즉시 적용됩니다. 다른 컴퓨터의 AI 클라이언트는 저장소를 설치한 뒤 아래와 같이 로컬 MCP 프로세스를 실행합니다.
+
+```json
+{
+  "mcpServers": {
+    "ddd-builder": {
+      "command": "/your/local/node",
+      "args": ["/your/local/ddd-builder/mcp/index.mjs"],
+      "env": {
+        "DDD_URL": "https://sol-macmini-2.tail6d02c8.ts.net",
+        "DDD_TOKEN": "앱에서_생성한_개인_토큰",
+        "DDD_READ_ONLY": "true"
+      }
+    }
+  }
+}
+```
+
+MCP는 stdio 연결이므로 별도 인터넷 포트를 열지 않습니다. 웹과 MCP의 데이터 요청은 같은 HTTPS 서비스로 전달되며, 내부 앱 포트는 3210, Funnel의 공개 포트는 443입니다. `DDD_READ_ONLY=false`로 클라이언트 설정을 바꿔도 서버의 읽기 토큰 권한을 넘을 수 없습니다.
+
+보안 정책과 실제 운영 조건은 [SECURITY.md](SECURITY.md), [통제 현황](docs/security/controls.md), [운영 절차](docs/security/operations.md), [데이터 처리 정책](docs/security/privacy.md)를 확인하세요. 실제 공급자 로그인·관리자 MFA·보안 연락처·외부 암호화 백업·복원 훈련·경보를 완료하기 전에는 공식 출시 준비 완료로 판정하지 않습니다.

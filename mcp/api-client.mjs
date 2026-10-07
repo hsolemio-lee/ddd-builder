@@ -6,7 +6,7 @@ export class BoardError extends Error {
   }
 }
 
-export function createBoardClient({ url, code, name = 'AI 도우미' }) {
+export function createBoardClient({ url, code, token, name = 'AI 도우미' }) {
   const base = new URL(url);
   if (
     !['http:', 'https:'].includes(base.protocol) ||
@@ -14,7 +14,18 @@ export function createBoardClient({ url, code, name = 'AI 도우미' }) {
     base.password
   )
     throw new Error('DDD_URL에는 HTTP 또는 HTTPS 서버 주소를 지정해 주세요.');
-  if (!code) throw new Error('DDD_CODE 접속 코드가 필요합니다.');
+  if (
+    token &&
+    (typeof token !== 'string' || !/^[A-Za-z0-9_-]{40,200}$/.test(token))
+  )
+    throw new Error('DDD_TOKEN 형식이 올바르지 않습니다.');
+  if (
+    token &&
+    base.protocol !== 'https:' &&
+    !['127.0.0.1', 'localhost', '[::1]'].includes(base.hostname)
+  )
+    throw new Error('DDD_TOKEN 연결에는 HTTPS가 필요합니다.');
+  if (!code && !token) throw new Error('DDD_TOKEN 또는 개발용 DDD_CODE가 필요합니다.');
   let cookie, signingIn;
   async function login() {
     if (!signingIn)
@@ -36,17 +47,18 @@ export function createBoardClient({ url, code, name = 'AI 도우미' }) {
     await signingIn;
   }
   async function request(path, method = 'GET', body, retry = true) {
-    if (!cookie) await login();
+    if (!token && !cookie) await login();
     const response = await fetch(new URL(`/api${path}`, base), {
       method,
+      redirect: 'error',
       headers: {
-        cookie,
+        ...(token ? { authorization: `Bearer ${token}` } : { cookie }),
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(10000),
     });
-    if (response.status === 401 && retry) {
+    if (response.status === 401 && retry && !token) {
       cookie = undefined;
       await login();
       return request(path, method, body, false);

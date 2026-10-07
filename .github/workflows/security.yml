@@ -30,6 +30,21 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
       - run: npm run test:docker
+      - name: Scan the production image with verified Trivy release
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=0.75.0
+          release="https://github.com/aquasecurity/trivy/releases/download/v${version}"
+          archive="trivy_${version}_Linux-64bit.tar.gz"
+          cd "$RUNNER_TEMP"
+          curl --fail --silent --show-error --location "$release/$archive" --output "$archive"
+          curl --fail --silent --show-error --location "$release/trivy_${version}_checksums.txt" --output trivy-checksums.txt
+          awk -v file="$archive" '$2 == file { print }' trivy-checksums.txt > trivy-selected.txt
+          test -s trivy-selected.txt
+          sha256sum --check trivy-selected.txt
+          tar -xzf "$archive" trivy
+          ./trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 ddd-builder:local
   secrets:
     runs-on: ubuntu-latest
     timeout-minutes: 5

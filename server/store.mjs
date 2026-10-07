@@ -21,6 +21,7 @@ export function openStore(dataDir) {
   );
   const parse = (row) => (row ? JSON.parse(row.json) : undefined);
   const store = {
+    db,
     state: () => ({
       projects: allProjects.all().map(parse),
       cards: allCards.all().map(parse),

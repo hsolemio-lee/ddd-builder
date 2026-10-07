@@ -54,10 +54,11 @@ const toText = (value) => ({
 export function createMcpServer({
   url = 'http://127.0.0.1:3210',
   code,
+  token,
   readOnly = true,
   name = 'AI 도우미',
 }) {
-  const board = createBoardClient({ url, code, name });
+  const board = createBoardClient({ url, code, token, name });
   const server = new McpServer(
     { name: 'ddd-builder', version: '1.0.0' },
     {

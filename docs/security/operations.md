@@ -31,7 +31,7 @@ backup_name="backups/ddd-builder-$(date -u +%Y%m%dT%H%M%SZ).tar.gz.age"
 docker compose stop ddd-builder
 # stop 상태에서도 volumes-from으로 같은 데이터 볼륨을 읽을 수 있다.
 if docker run --rm --user root --volumes-from ddd-builder:ro \
-  --entrypoint tar ddd-builder:local -czf - -C /app/data . \
+  busybox:1.37.0 tar -czf - -C /app/data . \
   | age -r "$AGE_RECIPIENT" -o "$backup_name"; then
   backup_status=0
 else

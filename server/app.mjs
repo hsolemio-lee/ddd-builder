@@ -4,6 +4,7 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { resolve, sep, extname } from 'node:path';
 import { networkInterfaces } from 'node:os';
 import { openStore, record, seedSample } from './store.mjs';
+import { createIdentity, validateAuthConfig } from './identity.mjs';
 import {
   securityOptions,
   FixedWindowLimiter,
@@ -227,9 +228,15 @@ export async function createApp({
   publicUrl,
   mcpContainerName,
   security,
+  auth = { mode: 'legacy' },
+  serviceMode = 'workshop',
 }) {
   const safeguards = securityOptions(security);
-  if (!dataDir || typeof code !== 'string' || !code)
+  validateAuthConfig(auth, serviceMode, publicUrl);
+  if (
+    !dataDir ||
+    (auth.mode === 'legacy' && (typeof code !== 'string' || !code))
+  )
     throw new Error('dataDir 및 code가 필요합니다.');
   if (publicUrl) {
     let url;
@@ -259,8 +266,9 @@ export async function createApp({
   const store = openStore(dataDir),
     sessions = new Map(),
     clients = new Set();
-  let closing;
+  let closing, identity;
   const session = (req) => {
+    if (identity) return identity.session(req);
     const token = req.headers.cookie
       ?.split(';')
       .map((c) => c.trim())
@@ -292,16 +300,45 @@ export async function createApp({
     client.res.write(output);
   }
   const emit = (client, name, value) => send(client, frame(name, value));
+  function live(client) {
+    if (!identity) return sessions.has(client.token) && !client.closing;
+    const current = identity.credential(client.token, false, false);
+    if (!current) {
+      disconnect(client);
+      return false;
+    }
+    client.user = current.user;
+    client.signed = current;
+    return !client.closing;
+  }
   function presence() {
-    const unique = new Map();
-    for (const c of clients)
-      if (!c.closing && sessions.has(c.token)) unique.set(c.user.id, c.user);
-    const people = [...unique.values()];
-    for (const client of clients) emit(client, 'presence', people);
+    const active = [...clients].filter(live);
+    for (const viewer of active) {
+      const ids = identity
+        ? new Set(identity.state(viewer.signed).projects.map((p) => p.id))
+        : null;
+      const unique = new Map();
+      for (const other of active) {
+        if (
+          !identity ||
+          other.user.id === viewer.user.id ||
+          identity.state(other.signed).projects.some((p) => ids.has(p.id))
+        )
+          unique.set(other.user.id, {
+            id: other.user.id,
+            name: other.user.name,
+          });
+      }
+      emit(viewer, 'presence', [...unique.values()]);
+    }
   }
   function broadcast() {
-    const output = frame('state', store.state());
-    for (const client of clients) send(client, output);
+    const output = identity ? null : frame('state', store.state());
+    for (const client of clients) {
+      if (!live(client)) continue;
+      if (identity) emit(client, 'user', client.user);
+      send(client, output || frame('state', identity.state(client.signed)));
+    }
   }
   function clearSession(token) {
     sessions.delete(token);
@@ -311,10 +348,37 @@ export async function createApp({
     presence();
   }
   function pruneSessions() {
+    if (identity) {
+      identity.prune();
+      for (const client of clients) live(client);
+    }
     for (const [token, value] of sessions)
       if (value.expiresAt <= Date.now()) clearSession(token);
   }
+  if (auth.mode === 'oidc') {
+    try {
+      identity = await createIdentity({
+        store,
+        auth,
+        publicUrl,
+        safeguards,
+        onChange(targetId) {
+          if (targetId)
+            for (const c of clients) if (c.user.id === targetId) disconnect(c);
+          broadcast();
+          presence();
+        },
+      });
+    } catch (error) {
+      store.close();
+      throw error;
+    }
+  }
   const server = createServer(async (req, res) => {
+    const requestId = randomUUID();
+    res.setHeader('x-request-id', requestId);
+    let auditSigned;
+
     const { secureRequest, requestOrigin } = transportSecurity(
       req,
       res,
@@ -388,6 +452,7 @@ export async function createApp({
         }
       }
       const signed = session(req);
+      auditSigned = signed;
       const loggingOut =
         signed && validOrigin && path === '/api/session' && method === 'DELETE';
       // Revocation must remain available when quotas are exhausted. Only an
@@ -405,7 +470,33 @@ export async function createApp({
         const writeRetry = writeLimiter.consume(signed.token);
         if (writeRetry) rejectRateLimit(writeRetry);
       }
-      if (path === '/api/session') {
+      if (path === '/api/auth/config' && method === 'GET') {
+        json(res, 200, {
+          mode: auth.mode,
+          ...(identity ? { loginUrl: '/api/auth/login' } : {}),
+        });
+        return;
+      }
+      if (identity) {
+        if (path === '/api/auth/login' || path === '/api/auth/callback') {
+          const retry = loginLimiter.consume(peer);
+          if (retry) rejectRateLimit(retry);
+        }
+        if (
+          await identity.routes({
+            path,
+            method,
+            req,
+            res,
+            signed,
+            requestId,
+            body,
+            json,
+          })
+        )
+          return;
+      }
+      if (!identity && path === '/api/session') {
         if (method === 'POST') {
           const loginRetry = loginLimiter.consume(peer);
           if (loginRetry) rejectRateLimit(loginRetry);
@@ -464,11 +555,26 @@ export async function createApp({
       }
       if (!signed) fail(401, '먼저 접속해 주세요.');
       const user = signed.user;
+      const authorize = (projectId, minimum = 'viewer', human = false) => {
+        if (!identity) return;
+        if (human) identity.human(signed);
+        identity.project(signed, projectId, minimum);
+      };
+      const auditChange = (event, projectId, targetId) =>
+        identity?.audit(
+          requestId,
+          signed,
+          event,
+          'success',
+          projectId,
+          targetId,
+        );
       if (path === '/api/state' && method === 'GET') {
-        json(res, 200, store.state());
+        json(res, 200, identity ? identity.state(signed) : store.state());
         return;
       }
       if (path === '/api/info' && method === 'GET') {
+        identity?.human(signed);
         json(res, 200, {
           urls: shareUrls(
             host,
@@ -491,7 +597,7 @@ export async function createApp({
                     '-e',
                     'DDD_URL',
                     '-e',
-                    'DDD_CODE',
+                    identity ? 'DDD_TOKEN' : 'DDD_CODE',
                     '-e',
                     'DDD_READ_ONLY',
                     '-e',
@@ -504,7 +610,7 @@ export async function createApp({
             ],
             env: {
               DDD_URL: `http://${host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host.includes(':') ? `[${host}]` : host}:${server.address().port}`,
-              DDD_CODE: code,
+              ...(identity ? { DDD_TOKEN: '' } : { DDD_CODE: code }),
               DDD_AI_NAME: 'AI 도우미',
             },
           },
@@ -512,6 +618,7 @@ export async function createApp({
         return;
       }
       if (path === '/api/events' && method === 'GET') {
+        identity?.human(signed);
         const sessionStreams = [...clients].filter(
           (client) => client.token === signed.token,
         ).length;
@@ -520,10 +627,19 @@ export async function createApp({
           sessionStreams >= safeguards.maxSsePerSession
         )
           rejectRateLimit();
-        const initial = frame('state', store.state());
+        const initial = frame(
+          'state',
+          identity ? identity.state(signed) : store.state(),
+        );
         if (Buffer.byteLength(initial) + 32 > safeguards.maxSseBufferBytes)
           fail(413, '현재 보드가 실시간 연결의 출력 한도를 초과했습니다.');
-        const client = { res, user, token: signed.token, closing: false };
+        const client = {
+          res,
+          user,
+          token: signed.token,
+          signed,
+          closing: false,
+        };
         res.on('close', () => {
           if (clients.delete(client)) presence();
         });
@@ -550,12 +666,17 @@ export async function createApp({
           );
         if (value.sample !== undefined && typeof value.sample !== 'boolean')
           fail(400, '예제 여부가 올바르지 않습니다.');
-        const project = value.sample
-          ? store.transaction(() =>
-              seedSample(store, user.name, name, description),
-            )
-          : record({ name, description }, user.name);
-        if (!value.sample) store.saveProject(project);
+        identity?.human(signed);
+        if (identity) identity.refresh(signed);
+        const project = store.transaction(() => {
+          const created = value.sample
+            ? seedSample(store, user.name, name, description)
+            : record({ name, description }, user.name);
+          if (!value.sample) store.saveProject(created);
+          identity?.addAdmin(signed, created.id);
+          auditChange('project.create', created.id, created.id);
+          return created;
+        });
         broadcast();
         json(res, 201, project);
         return;
@@ -565,6 +686,7 @@ export async function createApp({
         (match = path.match(/^\/api\/projects\/([^/]+)\/export$/)) &&
         method === 'GET'
       ) {
+        authorize(match[1]);
         const project = store.project(match[1]);
         if (!project) fail(404, '프로젝트를 찾을 수 없습니다.');
         const format = url.searchParams.get('format') || 'json';
@@ -582,6 +704,7 @@ export async function createApp({
           'content-disposition': `attachment; filename="${filename}"`,
           'cache-control': 'no-store',
         });
+        auditChange('project.export', project.id, project.id);
         res.end(
           format === 'json'
             ? JSON.stringify({ project, cards }, null, 2)
@@ -594,10 +717,14 @@ export async function createApp({
         method === 'POST'
       ) {
         const value = await body(req);
+        authorize(match[1], 'editor');
         if (!store.project(match[1])) fail(404, '프로젝트를 찾을 수 없습니다.');
         const fields = cardFields(value, match[1], store);
         const card = record({ projectId: match[1], ...fields }, user.name);
-        store.saveCard(card);
+        store.transaction(() => {
+          store.saveCard(card);
+          auditChange('card.change', card.projectId, card.id);
+        });
         broadcast();
         json(res, 201, card);
         return;
@@ -607,6 +734,7 @@ export async function createApp({
         ['PATCH', 'DELETE'].includes(method)
       ) {
         const value = await body(req);
+        authorize(match[1], 'admin', true);
         const current = store.project(match[1]);
         if (!current) fail(404, '프로젝트를 찾을 수 없습니다.');
         allowed(
@@ -617,7 +745,10 @@ export async function createApp({
         );
         revision(value, current);
         if (method === 'DELETE') {
-          store.deleteProject(current.id);
+          store.transaction(() => {
+            store.deleteProject(current.id);
+            auditChange('project.delete', current.id, current.id);
+          });
           broadcast();
           json(res, 200, { ok: true });
           return;
@@ -641,7 +772,10 @@ export async function createApp({
           },
           user,
         );
-        store.saveProject(project);
+        store.transaction(() => {
+          store.saveProject(project);
+          auditChange('project.change', project.id, project.id);
+        });
         broadcast();
         json(res, 200, project);
         return;
@@ -654,6 +788,7 @@ export async function createApp({
         allowed(value, ['revision', 'direction']);
         const current = store.card(match[1]);
         if (!current) fail(404, '카드를 찾을 수 없습니다.');
+        authorize(current.projectId, 'editor');
         revision(value, current);
         if (value.direction !== -1 && value.direction !== 1)
           fail(400, '이동 방향은 -1 또는 1이어야 합니다.');
@@ -676,14 +811,16 @@ export async function createApp({
           siblings[neighbor],
           siblings[index],
         ];
-        const cards = store.transaction(() =>
-          siblings.map((card, position) => {
+        const cards = store.transaction(() => {
+          const movedCards = siblings.map((card, position) => {
             if (card.position === position) return card;
             const moved = changed(card, { position }, user);
             store.saveCard(moved);
             return moved;
-          }),
-        );
+          });
+          auditChange('card.move', current.projectId, current.id);
+          return movedCards;
+        });
         broadcast();
         json(res, 200, { cards });
         return;
@@ -695,6 +832,7 @@ export async function createApp({
         const value = await body(req);
         const current = store.card(match[1]);
         if (!current) fail(404, '카드를 찾을 수 없습니다.');
+        authorize(current.projectId, 'editor');
         if (method === 'DELETE') {
           allowed(value, ['revision']);
           revision(value, current);
@@ -705,6 +843,7 @@ export async function createApp({
                 .cards.filter((c) => c.contextId === current.id))
                 store.saveCard(changed(card, { contextId: null }, user));
             store.deleteCard(current.id);
+            auditChange('card.delete', current.projectId, current.id);
           });
           broadcast();
           json(res, 200, { ok: true });
@@ -722,7 +861,10 @@ export async function createApp({
         revision(value, current);
         const fields = cardFields(value, current.projectId, store, current);
         const card = changed(current, fields, user);
-        store.saveCard(card);
+        store.transaction(() => {
+          store.saveCard(card);
+          auditChange('card.change', card.projectId, card.id);
+        });
         broadcast();
         json(res, 200, card);
         return;
@@ -730,7 +872,14 @@ export async function createApp({
       fail(404, '요청한 항목을 찾을 수 없습니다.');
     } catch (error) {
       if (!res.headersSent) {
-        if (!error.status) console.error(error);
+        if (!error.status) console.error('server_error', requestId);
+        if (identity && !closing && [401, 403, 404, 429].includes(error.status))
+          identity.audit(
+            requestId,
+            auditSigned,
+            error.status === 429 ? 'request.limit' : 'request.denied',
+            'failure',
+          );
         json(
           res,
           error.status || 500,
@@ -752,7 +901,8 @@ export async function createApp({
     apiLimiter.prune();
     loginLimiter.prune();
     writeLimiter.prune();
-    for (const client of clients) send(client, ': heartbeat\n\n');
+    for (const client of clients)
+      if (live(client)) send(client, ': heartbeat\n\n');
   }, 15000);
   heartbeat.unref();
   try {
