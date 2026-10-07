@@ -90,6 +90,37 @@ docker compose up -d --wait
 
 Compose의 환경 변수 설정 참고: [Docker 공식 문서](https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/).
 
+## Tailscale Funnel로 외부에 공유하기
+
+호스트에 Tailscale을 설치하고 로그인한 뒤, Docker 앱을 실행한 상태에서 아래 명령으로 공개 HTTPS 주소를 만듭니다. 공유기 포트포워딩은 필요하지 않습니다.
+
+```sh
+docker compose up -d --build --wait
+tailscale funnel --bg --https=443 http://127.0.0.1:3210
+```
+
+첫 실행에서 Funnel 활성화 승인 링크가 표시되면 브라우저에서 승인합니다. 출력된 `https://기기이름.네트워크이름.ts.net` 주소를 `.env`의 `PUBLIC_URL`로 지정하고 앱을 다시 실행합니다. 이 주소를 설정해야 외부 브라우저의 HTTPS 로그인과 초대 링크가 올바르게 동작합니다.
+
+```dotenv
+PUBLIC_URL=https://기기이름.네트워크이름.ts.net
+```
+
+```sh
+docker compose up -d --build --wait
+tailscale funnel status
+
+# 외부 공유 종료 (로컬 앱과 저장 데이터는 유지)
+tailscale funnel --https=443 off
+```
+
+외부 사용자는 HTTPS의 기본 포트인 **443**으로 접속하고, Funnel이 호스트의 **3210** 포트로 전달합니다. 접속자는 Tailscale을 설치하지 않고 앱의 기존 접속 코드로 입장합니다. 호스트 컴퓨터, Docker 앱, Tailscale은 실행 중이어야 하며, `--bg` 설정은 터미널 종료 뒤에도 유지됩니다.
+
+공개 DNS 반영에는 최대 10분이 걸릴 수 있습니다. 사내 접속을 비교하려면 먼저 휴대폰 모바일 데이터에서 같은 주소를 확인하세요. 호스트 자체의 Tailscale 연결을 통한 접속 성공만으로 공개 인터넷 접속을 확인할 수는 없습니다.
+
+MCP는 **stdio 방식이므로 별도의 공개 포트가 없습니다**. 호스트에서는 앱의 Docker MCP 설정을 그대로 사용합니다. 다른 컴퓨터의 AI 클라이언트에는 저장소와 Node 24 이상을 준비하고 `npm ci`를 실행한 뒤, 해당 컴퓨터의 `mcp/index.mjs`를 실행하도록 설정합니다. `DDD_URL`은 Funnel의 HTTPS 주소, `DDD_CODE`는 기존 앱 접속 코드입니다. MCP 프로세스가 공개 HTTPS 주소의 **443** 포트로 앱 API에 연결합니다. 클라우드 AI용 HTTP MCP 엔드포인트는 제공하지 않습니다.
+
+공식 안내: [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel).
+
 ## Node로 직접 실행하기
 
 Node.js **24 이상**이 필요합니다. SQLite는 Node에 내장된 모듈을 사용하므로 별도 데이터베이스 설치가 필요하지 않습니다.
@@ -114,7 +145,7 @@ npm start
 
 같은 카드의 이전 버전을 저장하면 이미 저장된 내용을 덮어쓰지 않고 충돌을 표시합니다. 편집 중인 내용은 유지되며, 필요한 내용을 복사한 뒤 최신 내용을 불러올 수 있습니다. 연결이 끊겼다가 복구되면 전체 보드를 다시 받습니다.
 
-공유 코드를 아는 참여자는 같은 작업 공간의 프로젝트를 읽고 수정할 수 있습니다. 이름은 표시용이며, 역할별 권한은 없습니다. 현재 버전은 신뢰할 수 있는 로컬 네트워크에서 쓰는 HTTP 서비스입니다. 인터넷 공개 접속을 위한 TLS, 계정 인증, 터널 설정은 포함하지 않습니다.
+공유 코드를 아는 참여자는 같은 작업 공간의 프로젝트를 읽고 수정할 수 있습니다. 이름은 표시용이며, 역할별 권한은 없습니다. 직접 실행의 서버는 HTTP를 사용합니다. 외부 공유는 위의 Tailscale Funnel HTTPS 구성을 사용하며, 지정한 `PUBLIC_URL`의 요청을 허용하고 HTTPS 접속의 세션 쿠키에 `Secure`를 적용합니다. 계정별 로그인과 역할별 권한은 포함하지 않습니다.
 
 ## 설계 흐름
 

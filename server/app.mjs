@@ -157,11 +157,11 @@ export function shareUrls(
   host,
   port,
   requestHost,
-  { publicUrl, containerized = false } = {},
+  { publicUrl, containerized = false, requestProtocol = 'http' } = {},
 ) {
   const urls = new Set();
   if (publicUrl) urls.add(new URL(publicUrl).origin);
-  if (requestHost) urls.add(`http://${requestHost}`);
+  if (requestHost) urls.add(`${requestProtocol}://${requestHost}`);
   if (containerized && urls.size) return [...urls];
   const wildcard = host === '0.0.0.0' || host === '::';
   const displayHost = wildcard ? 'localhost' : host;
@@ -245,6 +245,7 @@ export async function createApp({
     !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(mcpContainerName)
   )
     throw new Error('MCP_CONTAINER_NAME이 올바르지 않습니다.');
+  const publicAddress = publicUrl ? new URL(publicUrl) : undefined;
   const store = openStore(dataDir),
     sessions = new Map(),
     clients = new Set();
@@ -289,6 +290,11 @@ export async function createApp({
       const url = new URL(req.url, 'http://localhost'),
         path = url.pathname,
         method = req.method;
+      const secureRequest =
+        publicAddress?.protocol === 'https:' &&
+        (req.headers.host === publicAddress.host ||
+          req.headers.origin === publicAddress.origin);
+      const secureCookie = secureRequest ? '; Secure' : '';
       if (!path.startsWith('/api/')) {
         if (!['GET', 'HEAD'].includes(method) || !staticDir)
           fail(404, '파일을 찾을 수 없습니다.');
@@ -344,7 +350,10 @@ export async function createApp({
         } catch {
           fail(403, '다른 사이트의 변경 요청은 허용하지 않습니다.');
         }
-        if (origin.origin !== `http://${req.headers.host}`)
+        if (
+          origin.origin !== `http://${req.headers.host}` &&
+          origin.origin !== publicAddress?.origin
+        )
           fail(403, '다른 사이트의 변경 요청은 허용하지 않습니다.');
       }
       const signed = session(req);
@@ -374,7 +383,7 @@ export async function createApp({
             200,
             { user },
             {
-              'set-cookie': `ddd_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${sessionLifetime / 1000}`,
+              'set-cookie': `ddd_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${sessionLifetime / 1000}${secureCookie}`,
             },
           );
           return;
@@ -391,8 +400,7 @@ export async function createApp({
             200,
             { ok: true },
             {
-              'set-cookie':
-                'ddd_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0',
+              'set-cookie': `ddd_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secureCookie}`,
             },
           );
           return;
@@ -406,10 +414,16 @@ export async function createApp({
       }
       if (path === '/api/info' && method === 'GET') {
         json(res, 200, {
-          urls: shareUrls(host, server.address().port, req.headers.host, {
-            publicUrl,
-            containerized: Boolean(mcpContainerName),
-          }),
+          urls: shareUrls(
+            host,
+            server.address().port,
+            secureRequest ? publicAddress.host : req.headers.host,
+            {
+              publicUrl,
+              containerized: Boolean(mcpContainerName),
+              requestProtocol: secureRequest ? 'https' : 'http',
+            },
+          ),
           runtime: mcpContainerName ? 'docker' : 'local',
           mcp: {
             command: mcpContainerName ? 'docker' : process.execPath,

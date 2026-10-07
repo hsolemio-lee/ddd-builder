@@ -559,6 +559,54 @@ test('invalid advertised URLs and Docker container names are rejected at startup
   );
 });
 
+test('configured HTTPS origin works through Funnel, uses Secure cookies and rejects foreign origins', async (t) => {
+  const publicUrl = 'https://workshop.tail-example.ts.net';
+  const { req, base } = await setup(t, {
+    publicUrl,
+    mcpContainerName: 'ddd-builder',
+  });
+  const result = await req(
+    '/api/session',
+    'POST',
+    { name: '외부 참여자', code: 'test-secret' },
+    undefined,
+    { origin: publicUrl },
+  );
+  assert.equal(result.status, 200);
+  assert.match(result.headers.get('set-cookie'), /; Secure(?:;|$)/);
+  const cookie = result.headers.get('set-cookie').split(';')[0];
+  const rejected = await req(
+    '/api/projects',
+    'POST',
+    { name: '잘못된 요청' },
+    cookie,
+    {
+      origin: 'https://untrusted.example',
+      'x-forwarded-proto': 'https',
+      'x-forwarded-host': 'workshop.tail-example.ts.net',
+    },
+  );
+  assert.equal(rejected.status, 403);
+  const info = await req('/api/info', 'GET', undefined, cookie, {
+    origin: publicUrl,
+  });
+  assert.deepEqual(info.data.urls, [publicUrl]);
+  const logout = await req('/api/session', 'DELETE', undefined, cookie, {
+    origin: publicUrl,
+  });
+  assert.equal(logout.status, 200);
+  assert.match(logout.headers.get('set-cookie'), /; Secure(?:;|$)/);
+  const local = await req(
+    '/api/session',
+    'POST',
+    { name: '로컬 참여자', code: 'test-secret' },
+    undefined,
+    { origin: base },
+  );
+  assert.equal(local.status, 200);
+  assert.doesNotMatch(local.headers.get('set-cookie'), /; Secure(?:;|$)/);
+});
+
 test('CLI saves a private access code, respects ACCESS_CODE, and initializes demo only once', async (t) => {
   const dataDir = await mkdtemp(join(tmpdir(), 'ddd-cli-'));
   t.after(() => rm(dataDir, { recursive: true, force: true }));
