@@ -358,26 +358,31 @@ export async function createApp({
         return;
       }
       const peer = req.socket.remoteAddress || 'unknown';
-      const apiRetry = apiLimiter.consume(peer);
-      if (apiRetry) rejectRateLimit(apiRetry);
       pruneSessions();
+      let validOrigin = true;
       if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && req.headers.origin) {
-        let origin;
         try {
-          origin = new URL(req.headers.origin);
+          const origin = new URL(req.headers.origin);
+          validOrigin =
+            origin.origin === req.headers.origin &&
+            (origin.origin === requestOrigin ||
+              origin.origin === publicAddress?.origin);
         } catch {
-          fail(403, '다른 사이트의 변경 요청은 허용하지 않습니다.');
+          validOrigin = false;
         }
-        if (
-          origin.origin !== req.headers.origin ||
-          (origin.origin !== requestOrigin &&
-            origin.origin !== publicAddress?.origin)
-        )
-          fail(403, '다른 사이트의 변경 요청은 허용하지 않습니다.');
       }
       const signed = session(req);
+      const loggingOut =
+        signed && validOrigin && path === '/api/session' && method === 'DELETE';
+      // Revocation must remain available when quotas are exhausted. Only an
+      // authenticated logout with an allowed origin receives this exemption.
+      const apiRetry = loggingOut ? 0 : apiLimiter.consume(peer);
+      if (apiRetry) rejectRateLimit(apiRetry);
+      if (!validOrigin)
+        fail(403, '다른 사이트의 변경 요청은 허용하지 않습니다.');
       if (
         signed &&
+        !loggingOut &&
         !['GET', 'HEAD', 'OPTIONS'].includes(method) &&
         !(path === '/api/session' && method === 'POST')
       ) {

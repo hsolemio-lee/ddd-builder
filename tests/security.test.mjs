@@ -185,6 +185,79 @@ test('authenticated writes have a per-session limit and leave reads available', 
   assert.equal((await create(bob)).status, 201);
 });
 
+test('authenticated logout bypasses exhausted write quota, revokes its session and closes SSE', async (t) => {
+  const { req, login, stream, base } = await setup(t, {
+    security: { writeRate: { limit: 1 } },
+  });
+  const cookie = await login();
+  const events = await stream(cookie);
+  assert.equal(events.response.status, 200);
+  const reader = events.response.body.getReader();
+  await reader.read();
+  const create = () =>
+    req('/api/projects', {
+      method: 'POST',
+      cookie,
+      body: { name: 'Quota' },
+    });
+  assert.equal((await create()).status, 201);
+  assert.equal((await create()).status, 429);
+  assert.equal(
+    (
+      await req('/api/session', {
+        method: 'DELETE',
+        cookie,
+        headers: { origin: 'https://foreign.example' },
+      })
+    ).status,
+    403,
+  );
+  assert.equal((await req('/api/session', { cookie })).status, 200);
+  const logout = await req('/api/session', {
+    method: 'DELETE',
+    cookie,
+    headers: { origin: base },
+  });
+  assert.equal(logout.status, 200);
+  assert.match(logout.headers.get('set-cookie'), /^ddd_session=;.*Max-Age=0/);
+  assert.equal((await req('/api/session', { cookie })).status, 401);
+  while (!(await reader.read()).done) {} // Drain already queued state frames.
+});
+
+test('authenticated same-origin logout also bypasses exhausted total API quota', async (t) => {
+  const { req, login, stream, base } = await setup(t, {
+    security: { apiRate: { limit: 3, windowMs: 500 } },
+  });
+  const cookie = await login();
+  const events = await stream(cookie);
+  assert.equal(events.response.status, 200);
+  const reader = events.response.body.getReader();
+  await reader.read();
+  assert.equal((await req('/api/state', { cookie })).status, 200);
+  assert.equal((await req('/api/state', { cookie })).status, 429);
+  assert.equal((await req('/api/session', { method: 'DELETE' })).status, 429);
+  assert.equal(
+    (
+      await req('/api/session', {
+        method: 'DELETE',
+        cookie,
+        headers: { origin: 'https://foreign.example' },
+      })
+    ).status,
+    429,
+  );
+  const logout = await req('/api/session', {
+    method: 'DELETE',
+    cookie,
+    headers: { origin: base },
+  });
+  assert.equal(logout.status, 200);
+  assert.match(logout.headers.get('set-cookie'), /^ddd_session=;.*Max-Age=0/);
+  while (!(await reader.read()).done) {}
+  await new Promise((resolve) => setTimeout(resolve, 550));
+  assert.equal((await req('/api/session', { cookie })).status, 401);
+});
+
 test('a full limiter refuses new keys without evicting existing counters and reclaims expired keys', async (t) => {
   const { req, login } = await setup(t, {
     security: { writeRate: { limit: 1, maxKeys: 1, windowMs: 500 } },
