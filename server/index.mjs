@@ -38,9 +38,11 @@ const app = await createApp({
   host,
   port,
   staticDir: join(root, 'dist'),
+  publicUrl: process.env.PUBLIC_URL || undefined,
+  mcpContainerName: process.env.MCP_CONTAINER_NAME || undefined,
 });
 console.log(
-  `DDD Builder 실행 중\n${shareUrls(host, app.server.address().port).join('\n')}\n접속 코드: ${code}\n데이터: ${dataDir}`,
+  `DDD Builder 실행 중\n${shareUrls(host, app.server.address().port, undefined, { publicUrl: process.env.PUBLIC_URL || undefined, containerized: Boolean(process.env.MCP_CONTAINER_NAME) }).join('\n')}\n접속 코드: ${code}\n데이터: ${dataDir}`,
 );
 let stopping = false;
 async function shutdown() {

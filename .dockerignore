@@ -1,0 +1,14 @@
+.git
+node_modules
+dist
+data
+backups
+test-results
+playwright-report
+docs
+tests
+scripts
+.env
+.env.*
+*.tsbuildinfo
+.DS_Store

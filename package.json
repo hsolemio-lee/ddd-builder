@@ -13,6 +13,7 @@
     "test": "node --test tests/server.test.mjs tests/mcp.test.mjs",
     "mcp": "node mcp/index.mjs",
     "test:e2e": "playwright test",
+    "test:docker": "node --test tests/docker.test.mjs",
     "format": "prettier --write src server mcp scripts tests *.json *.ts index.html"
   },
   "dependencies": {

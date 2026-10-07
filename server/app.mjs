@@ -153,9 +153,16 @@ function json(res, status, value, headers = {}) {
   });
   res.end(JSON.stringify(value));
 }
-export function shareUrls(host, port, requestHost) {
+export function shareUrls(
+  host,
+  port,
+  requestHost,
+  { publicUrl, containerized = false } = {},
+) {
   const urls = new Set();
+  if (publicUrl) urls.add(new URL(publicUrl).origin);
   if (requestHost) urls.add(`http://${requestHost}`);
+  if (containerized && urls.size) return [...urls];
   const wildcard = host === '0.0.0.0' || host === '::';
   const displayHost = wildcard ? 'localhost' : host;
   urls.add(
@@ -212,9 +219,32 @@ export async function createApp({
   staticDir,
   host = '127.0.0.1',
   port = 0,
+  publicUrl,
+  mcpContainerName,
 }) {
   if (!dataDir || typeof code !== 'string' || !code)
     throw new Error('dataDir 및 code가 필요합니다.');
+  if (publicUrl) {
+    let url;
+    try {
+      url = new URL(publicUrl);
+    } catch {
+      throw new Error('PUBLIC_URL에는 HTTP 또는 HTTPS 주소를 지정해 주세요.');
+    }
+    if (
+      !['http:', 'https:'].includes(url.protocol) ||
+      url.username ||
+      url.password
+    )
+      throw new Error(
+        'PUBLIC_URL에는 인증 정보가 없는 HTTP 또는 HTTPS 주소를 지정해 주세요.',
+      );
+  }
+  if (
+    mcpContainerName &&
+    !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(mcpContainerName)
+  )
+    throw new Error('MCP_CONTAINER_NAME이 올바르지 않습니다.');
   const store = openStore(dataDir),
     sessions = new Map(),
     clients = new Set();
@@ -376,13 +406,36 @@ export async function createApp({
       }
       if (path === '/api/info' && method === 'GET') {
         json(res, 200, {
-          urls: shareUrls(host, server.address().port, req.headers.host),
+          urls: shareUrls(host, server.address().port, req.headers.host, {
+            publicUrl,
+            containerized: Boolean(mcpContainerName),
+          }),
+          runtime: mcpContainerName ? 'docker' : 'local',
           mcp: {
-            command: process.execPath,
-            args: [resolve(import.meta.dirname, '../mcp/index.mjs')],
+            command: mcpContainerName ? 'docker' : process.execPath,
+            args: [
+              ...(mcpContainerName
+                ? [
+                    'exec',
+                    '-i',
+                    '-e',
+                    'DDD_URL',
+                    '-e',
+                    'DDD_CODE',
+                    '-e',
+                    'DDD_READ_ONLY',
+                    '-e',
+                    'DDD_AI_NAME',
+                    mcpContainerName,
+                    process.execPath,
+                  ]
+                : []),
+              resolve(import.meta.dirname, '../mcp/index.mjs'),
+            ],
             env: {
               DDD_URL: `http://${host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host.includes(':') ? `[${host}]` : host}:${server.address().port}`,
               DDD_CODE: code,
+              DDD_AI_NAME: 'AI 도우미',
             },
           },
         });

@@ -15,6 +15,7 @@ import type { Project } from '../types';
 
 interface Info {
   urls: string[];
+  runtime?: 'local' | 'docker';
   mcp: { command: string; args: string[]; env: Record<string, string> };
 }
 async function copy(text: string) {
@@ -199,7 +200,9 @@ export default function ShareDialog({
                 <div>
                   <strong>앱 서버를 켜 두세요</strong>
                   <p>
-                    아래 설정은 이 컴퓨터에서 실행하는 AI 클라이언트용입니다.
+                    {info?.runtime === 'docker'
+                      ? 'Docker Desktop과 앱 컨테이너를 실행해 두세요. AI 클라이언트는 docker 명령으로 컨테이너 안의 MCP에 연결합니다.'
+                      : '아래 설정은 이 컴퓨터에서 실행하는 AI 클라이언트용입니다.'}
                   </p>
                 </div>
               </li>
@@ -278,8 +281,10 @@ export default function ShareDialog({
             )}
             <p className="dialog-note">
               AI 클라이언트의 모델로 분석합니다. 연결 설정을 추가해도 자동으로
-              분석을 실행하지 않아요. 다른 컴퓨터에서 연결하려면 저장소를
-              복사하고 실행 경로와 DDD_URL을 변경해 주세요.
+              분석을 실행하지 않아요.{' '}
+              {info?.runtime === 'docker'
+                ? '이 설정은 Docker가 실행 중인 호스트의 AI 클라이언트용입니다. 기존 Node 실행용 MCP 설정을 사용했다면 새 설정으로 교체해 주세요.'
+                : '다른 컴퓨터에서 연결하려면 저장소를 복사하고 실행 경로와 DDD_URL을 변경해 주세요.'}
             </p>
           </>
         )}

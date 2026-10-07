@@ -9,11 +9,12 @@ import { createApp } from '../server/app.mjs';
 async function setup(t, options = {}) {
   assert.equal(typeof createApp, 'function', 'backend exports createApp');
   const dataDir = await mkdtemp(join(tmpdir(), 'ddd-test-'));
-  const app = await createApp({ dataDir, code: 'test-secret', ...options });
+  let app;
   t.after(async () => {
-    await app.close();
+    await app?.close();
     await rm(dataDir, { recursive: true, force: true });
   });
+  app = await createApp({ dataDir, code: 'test-secret', ...options });
   const base = `http://127.0.0.1:${app.server.address().port}`;
   async function req(path, method = 'GET', body, cookie, extra = {}) {
     const response = await fetch(base + path, {
@@ -519,6 +520,43 @@ test('info provides a working local MCP launch configuration to authenticated us
   );
   assert.equal(info.mcp.env.DDD_URL, base);
   assert.equal(info.mcp.env.DDD_CODE, 'test-secret');
+});
+
+test('Docker launch info uses host-facing URLs and forwards MCP mode through docker exec', async (t) => {
+  const { req, login, base } = await setup(t, {
+    host: '0.0.0.0',
+    publicUrl: 'http://192.168.0.108:3300/',
+    mcpContainerName: 'ddd-compose-test',
+  });
+  const cookie = await login();
+  const { data: info } = await req('/api/info', 'GET', undefined, cookie);
+  assert.deepEqual(info.urls, ['http://192.168.0.108:3300', base]);
+  assert.equal(info.runtime, 'docker');
+  assert.equal(info.mcp.command, 'docker');
+  assert.deepEqual(info.mcp.args.slice(0, 2), ['exec', '-i']);
+  for (const key of ['DDD_URL', 'DDD_CODE', 'DDD_READ_ONLY', 'DDD_AI_NAME']) {
+    const index = info.mcp.args.indexOf(key);
+    assert.ok(index > 0);
+    assert.equal(info.mcp.args[index - 1], '-e');
+  }
+  assert.ok(info.mcp.args.includes('ddd-compose-test'));
+  assert.equal(info.mcp.env.DDD_URL, base);
+  assert.equal(info.mcp.env.DDD_CODE, 'test-secret');
+});
+
+test('invalid advertised URLs and Docker container names are rejected at startup', async (t) => {
+  await assert.rejects(
+    () => setup(t, { publicUrl: 'file:///etc/passwd' }),
+    /PUBLIC_URL/,
+  );
+  await assert.rejects(
+    () => setup(t, { publicUrl: 'http://user:secret@localhost' }),
+    /PUBLIC_URL/,
+  );
+  await assert.rejects(
+    () => setup(t, { mcpContainerName: 'invalid container' }),
+    /MCP_CONTAINER_NAME/,
+  );
 });
 
 test('CLI saves a private access code, respects ACCESS_CODE, and initializes demo only once', async (t) => {

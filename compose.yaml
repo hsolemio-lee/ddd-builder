@@ -1,0 +1,41 @@
+name: ddd-builder
+
+services:
+  ddd-builder:
+    build: .
+    image: ddd-builder:local
+    container_name: ${DDD_CONTAINER_NAME:-ddd-builder}
+    init: true
+    restart: unless-stopped
+    ports:
+      - '${DDD_BIND_ADDRESS:-0.0.0.0}:${DDD_PORT:-3210}:3210'
+    environment:
+      HOST: 0.0.0.0
+      PORT: '3210'
+      DATA_DIR: /app/data
+      ACCESS_CODE: ${ACCESS_CODE:-}
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:${DDD_PORT:-3210}}
+      MCP_CONTAINER_NAME: ${DDD_CONTAINER_NAME:-ddd-builder}
+    volumes:
+      - workshop-data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '--input-type=module',
+          '-e',
+          "const response = await fetch('http://127.0.0.1:3210/'); if (!response.ok) process.exit(1)",
+        ]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  workshop-data:
