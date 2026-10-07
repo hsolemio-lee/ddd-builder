@@ -34,9 +34,12 @@ Files: create server/security.mjs and tests/security.test.mjs; modify server/app
 - [x] Add SECURITY.md, security-controls matrix and incident/backup/data-retention/AI-data handling runbooks with implemented versus pending status.
 - [x] Add dependency/secret checks and deployment checks. Production startup rejects legacy auth, absent identity/owner settings and non-HTTPS public URL.
 - [x] Verify signed-fixture owner login and additive data migration in isolated tests; record external setup requirements without exposing credentials.
-- [ ] Configure the actual identity provider and owner, verify real login/MFA against a separate data copy, and then transition the public service to production.
+- [x] Configure the actual Google identity provider and owner, verify real login against a separate data copy, and then transition the public service to production.
+- [ ] Verify administrator MFA, a second designated operator and access recovery procedures.
 - [ ] Configure encrypted off-host backups, restore drills, alert delivery and a real security contact before official release.
 
 ## Verification record (2026-10-07)
 
-Node tests: 61 passed, including signed OIDC failures, live revocation, MCP scope enforcement, and audit-write failure rollback. Browser tests: 11 passed. Production build and production dependency audit passed. Docker integration passed and validates the real image, persistence and deployment limits. The final production image passed HIGH/CRITICAL vulnerability scanning. GitHub checks are required before deployment. Real provider credentials and operator controls remain pending; the existing public workshop stays explicitly in workshop/legacy mode.
+Node tests: 61 passed, including signed OIDC failures, live revocation, MCP scope enforcement, and audit-write failure rollback. Browser tests: 11 passed. Production build and production dependency audit passed. Docker integration passed and validates the real image, persistence and deployment limits. The final production image passed HIGH/CRITICAL vulnerability scanning. GitHub checks passed before deployment.
+
+Real Google OIDC login passed on an isolated data copy and the production container on 2026-10-07. Both retained all 2 projects and 14 cards with the predeployment content digest. The owner received site administration and administration of both existing projects. Public verification confirmed unauthenticated state 401, legacy login 405, Google redirect 302, PKCE S256, exact callback, Secure/HttpOnly binding cookie and HSTS. Operator MFA, off-host encrypted backup, alert delivery and published privacy/contact information remain release blockers.
