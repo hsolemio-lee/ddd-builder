@@ -5,7 +5,7 @@ import { createApp, shareUrls } from './app.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const dataDir = resolve(process.env.DATA_DIR || join(root, 'data'));
-const host = process.env.HOST || '0.0.0.0';
+const host = process.env.HOST || '127.0.0.1';
 const port = Number(process.env.PORT || 3210);
 if (!Number.isInteger(port) || port < 0 || port > 65535)
   throw new Error('PORT는 0부터 65535 사이의 숫자여야 합니다.');
@@ -42,7 +42,7 @@ const app = await createApp({
   mcpContainerName: process.env.MCP_CONTAINER_NAME || undefined,
 });
 console.log(
-  `DDD Builder 실행 중\n${shareUrls(host, app.server.address().port, undefined, { publicUrl: process.env.PUBLIC_URL || undefined, containerized: Boolean(process.env.MCP_CONTAINER_NAME) }).join('\n')}\n접속 코드: ${code}\n데이터: ${dataDir}`,
+  `DDD Builder 실행 중\n${shareUrls(host, app.server.address().port, undefined, { publicUrl: process.env.PUBLIC_URL || undefined, containerized: Boolean(process.env.MCP_CONTAINER_NAME) }).join('\n')}\n접속 코드 파일: ${codePath}\n데이터: ${dataDir}`,
 );
 let stopping = false;
 async function shutdown() {

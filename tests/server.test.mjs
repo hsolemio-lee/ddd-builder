@@ -653,7 +653,8 @@ test('CLI saves a private access code, respects ACCESS_CODE, and initializes dem
   const code = (await readFile(join(dataDir, 'access-code'), 'utf8')).trim();
   assert.ok(code.length >= 20);
   assert.equal((await stat(join(dataDir, 'access-code'))).mode & 0o777, 0o600);
-  assert.ok(first.output.includes(code));
+  assert.equal(first.output.includes(code), false);
+  assert.ok(first.output.includes(join(dataDir, 'access-code')));
   const loginResponse = await fetch(first.base + '/api/session', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

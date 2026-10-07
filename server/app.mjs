@@ -4,6 +4,12 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { resolve, sep, extname } from 'node:path';
 import { networkInterfaces } from 'node:os';
 import { openStore, record, seedSample } from './store.mjs';
+import {
+  securityOptions,
+  FixedWindowLimiter,
+  transportSecurity,
+  rejectRateLimit,
+} from './security.mjs';
 
 const kinds = {
   discovery: ['problem', 'actor', 'term'],
@@ -13,7 +19,6 @@ const kinds = {
   tasks: ['task'],
 };
 const limits = { name: 120, title: 200, description: 20000, detail: 20000 };
-const sessionLifetime = 12 * 60 * 60 * 1000;
 const comparePosition = (a, b) =>
   a.position - b.position || a.id.localeCompare(b.id);
 function fail(status, error, current) {
@@ -221,7 +226,9 @@ export async function createApp({
   port = 0,
   publicUrl,
   mcpContainerName,
+  security,
 }) {
+  const safeguards = securityOptions(security);
   if (!dataDir || typeof code !== 'string' || !code)
     throw new Error('dataDir 및 code가 필요합니다.');
   if (publicUrl) {
@@ -246,6 +253,9 @@ export async function createApp({
   )
     throw new Error('MCP_CONTAINER_NAME이 올바르지 않습니다.');
   const publicAddress = publicUrl ? new URL(publicUrl) : undefined;
+  const apiLimiter = new FixedWindowLimiter(safeguards.apiRate),
+    loginLimiter = new FixedWindowLimiter(safeguards.loginRate),
+    writeLimiter = new FixedWindowLimiter(safeguards.writeRate);
   const store = openStore(dataDir),
     sessions = new Map(),
     clients = new Set();
@@ -276,6 +286,7 @@ export async function createApp({
   }
   function clearSession(token) {
     sessions.delete(token);
+    writeLimiter.delete(token);
     for (const client of clients)
       if (client.token === token) {
         clients.delete(client);
@@ -283,17 +294,20 @@ export async function createApp({
       }
     presence();
   }
+  function pruneSessions() {
+    for (const [token, value] of sessions)
+      if (value.expiresAt <= Date.now()) clearSession(token);
+  }
   const server = createServer(async (req, res) => {
-    res.setHeader('x-content-type-options', 'nosniff');
-    res.setHeader('referrer-policy', 'same-origin');
+    const { secureRequest, requestOrigin } = transportSecurity(
+      req,
+      res,
+      publicAddress,
+    );
     try {
       const url = new URL(req.url, 'http://localhost'),
         path = url.pathname,
         method = req.method;
-      const secureRequest =
-        publicAddress?.protocol === 'https:' &&
-        (req.headers.host === publicAddress.host ||
-          req.headers.origin === publicAddress.origin);
       const secureCookie = secureRequest ? '; Secure' : '';
       if (!path.startsWith('/api/')) {
         if (!['GET', 'HEAD'].includes(method) || !staticDir)
@@ -343,6 +357,10 @@ export async function createApp({
         res.end(method === 'HEAD' ? undefined : await readFile(file));
         return;
       }
+      const peer = req.socket.remoteAddress || 'unknown';
+      const apiRetry = apiLimiter.consume(peer);
+      if (apiRetry) rejectRateLimit(apiRetry);
+      pruneSessions();
       if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && req.headers.origin) {
         let origin;
         try {
@@ -351,14 +369,25 @@ export async function createApp({
           fail(403, '다른 사이트의 변경 요청은 허용하지 않습니다.');
         }
         if (
-          origin.origin !== `http://${req.headers.host}` &&
-          origin.origin !== publicAddress?.origin
+          origin.origin !== req.headers.origin ||
+          (origin.origin !== requestOrigin &&
+            origin.origin !== publicAddress?.origin)
         )
           fail(403, '다른 사이트의 변경 요청은 허용하지 않습니다.');
       }
       const signed = session(req);
+      if (
+        signed &&
+        !['GET', 'HEAD', 'OPTIONS'].includes(method) &&
+        !(path === '/api/session' && method === 'POST')
+      ) {
+        const writeRetry = writeLimiter.consume(signed.token);
+        if (writeRetry) rejectRateLimit(writeRetry);
+      }
       if (path === '/api/session') {
         if (method === 'POST') {
+          const loginRetry = loginLimiter.consume(peer);
+          if (loginRetry) rejectRateLimit(loginRetry);
           const value = await body(req);
           allowed(value, ['name', 'code']);
           const name = text(value.name, '이름', 60, true);
@@ -371,19 +400,25 @@ export async function createApp({
             !timingSafeEqual(supplied, expected)
           )
             fail(401, '접속 코드가 올바르지 않습니다.');
+          pruneSessions();
+          if (
+            sessions.size >= safeguards.maxSessions &&
+            !sessions.has(signed?.token)
+          )
+            rejectRateLimit();
           if (signed) clearSession(signed.token);
           const token = randomBytes(32).toString('hex'),
             user = { id: randomUUID(), name };
           sessions.set(token, {
             user,
-            expiresAt: Date.now() + sessionLifetime,
+            expiresAt: Date.now() + safeguards.sessionLifetimeMs,
           });
           json(
             res,
             200,
             { user },
             {
-              'set-cookie': `ddd_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${sessionLifetime / 1000}${secureCookie}`,
+              'set-cookie': `ddd_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.max(1, Math.floor(safeguards.sessionLifetimeMs / 1000))}${secureCookie}`,
             },
           );
           return;
@@ -456,6 +491,14 @@ export async function createApp({
         return;
       }
       if (path === '/api/events' && method === 'GET') {
+        const sessionStreams = [...clients].filter(
+          (client) => client.token === signed.token,
+        ).length;
+        if (
+          clients.size >= safeguards.maxSseClients ||
+          sessionStreams >= safeguards.maxSsePerSession
+        )
+          rejectRateLimit();
         res.writeHead(200, {
           'content-type': 'text/event-stream; charset=utf-8',
           'cache-control': 'no-cache, no-transform',
@@ -664,18 +707,27 @@ export async function createApp({
     } catch (error) {
       if (!res.headersSent) {
         if (!error.status) console.error(error);
-        json(res, error.status || 500, {
-          error: error.status ? error.message : '서버에서 오류가 발생했습니다.',
-          ...(error.current ? { current: error.current } : {}),
-        });
+        json(
+          res,
+          error.status || 500,
+          {
+            error: error.status
+              ? error.message
+              : '서버에서 오류가 발생했습니다.',
+            ...(error.current ? { current: error.current } : {}),
+          },
+          error.retryAfter ? { 'retry-after': String(error.retryAfter) } : {},
+        );
       } else res.end();
     }
   });
   server.requestTimeout = 30000;
   server.headersTimeout = 15000;
   const heartbeat = setInterval(() => {
-    for (const [token, value] of sessions)
-      if (value.expiresAt <= Date.now()) clearSession(token);
+    pruneSessions();
+    apiLimiter.prune();
+    loginLimiter.prune();
+    writeLimiter.prune();
     for (const client of clients) client.res.write(': heartbeat\n\n');
   }, 15000);
   heartbeat.unref();
