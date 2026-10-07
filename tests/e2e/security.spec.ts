@@ -125,3 +125,59 @@ test('official logout clears browser identity and selected project', async ({
     ]),
   ).toEqual([null, null]);
 });
+
+test('site-admin demotion clears the open admin dialog on stream reconnect', async ({
+  page,
+}) => {
+  let demoted = false;
+  await page.route('**/api/session', (route) =>
+    route.fulfill({ json: { user: { ...user, siteAdmin: !demoted } } }),
+  );
+  await page.route('**/api/state', (route) =>
+    route.fulfill({ json: { projects: [project], cards: [] } }),
+  );
+  await page.route('**/api/events', (route) =>
+    route.fulfill({
+      contentType: 'text/event-stream',
+      body: `retry: 50\n\nevent: state\ndata: ${JSON.stringify({ projects: [project], cards: [] })}\n\n`,
+    }),
+  );
+  await page.route('**/api/admin/users', (route) =>
+    route.fulfill(
+      demoted
+        ? { status: 403, json: { error: '권한이 없습니다.' } }
+        : {
+            json: {
+              users: [
+                {
+                  ...user,
+                  email: 'sensitive-admin@example.test',
+                  siteAdmin: true,
+                  disabled: false,
+                },
+              ],
+            },
+          },
+    ),
+  );
+  await page.route('**/api/admin/audit', (route) =>
+    route.fulfill({ json: { events: [] } }),
+  );
+  await page.goto('/');
+  await page
+    .getByRole('button', { name: '계정과 감사 기록', exact: true })
+    .click();
+  await expect(
+    page.getByText('sensitive-admin@example.test', { exact: false }),
+  ).toBeVisible();
+  demoted = true;
+  await expect(
+    page.getByRole('dialog', { name: '계정과 감사 기록' }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole('button', { name: '계정과 감사 기록', exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByText('sensitive-admin@example.test', { exact: false }),
+  ).toHaveCount(0);
+});

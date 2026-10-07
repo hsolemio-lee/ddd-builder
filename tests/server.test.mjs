@@ -620,6 +620,8 @@ test('CLI saves a private access code, respects ACCESS_CODE, and initializes dem
         HOST: '127.0.0.1',
         PORT: '0',
         ACCESS_CODE: '',
+        SERVICE_MODE: 'workshop',
+        AUTH_MODE: 'legacy',
         ...env,
       },
       stdio: ['ignore', 'pipe', 'pipe'],

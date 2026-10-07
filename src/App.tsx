@@ -92,20 +92,34 @@ export default function App() {
         setNotice('보드 데이터를 읽지 못했어요. 새로고침해 주세요.');
       }
     });
+    function applyUser(next: User) {
+      if (!active) return;
+      if (next.id !== user!.id) {
+        setWorkspace({ projects: [], cards: [] });
+        setEditor(undefined);
+        setDetails(undefined);
+        setProjectForm(undefined);
+        setDialog(undefined);
+        setSecurityOpen(false);
+        setReceivedState(false);
+        setProjectId('');
+        localStorage.removeItem('ddd-project');
+      }
+      setUser((current) =>
+        current &&
+        current.id === next.id &&
+        current.siteAdmin === next.siteAdmin &&
+        current.email === next.email &&
+        current.name === next.name
+          ? current
+          : next,
+      );
+      if (!next.siteAdmin) setSecurityOpen(false);
+    }
     source.addEventListener('user', (event) => {
       if (!active) return;
       try {
-        const next: User = JSON.parse((event as MessageEvent).data);
-        setUser((current) =>
-          current &&
-          current.id === next.id &&
-          (current.siteAdmin !== next.siteAdmin ||
-            current.email !== next.email ||
-            current.name !== next.name)
-            ? next
-            : current,
-        );
-        if (!next.siteAdmin) setSecurityOpen(false);
+        applyUser(JSON.parse((event as MessageEvent).data));
       } catch {
         /* reconnect refreshes the session */
       }
@@ -122,8 +136,11 @@ export default function App() {
     source.onerror = () => {
       if (!active) return;
       setConnected(false);
-      api('/session')
-        .then(() => api<Workspace>('/state'))
+      api<{ user: User }>('/session')
+        .then((session) => {
+          applyUser(session.user);
+          return api<Workspace>('/state');
+        })
         .then((next) => {
           if (active) setWorkspace(next);
         })

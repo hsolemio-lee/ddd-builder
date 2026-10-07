@@ -17,6 +17,8 @@ export default defineConfig({
       HOST: '127.0.0.1',
       DATA_DIR: 'test-results/e2e-data',
       ACCESS_CODE: 'workshop-test-code',
+      SERVICE_MODE: 'workshop',
+      AUTH_MODE: 'legacy',
     },
     reuseExistingServer: false,
   },

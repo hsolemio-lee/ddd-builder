@@ -90,13 +90,14 @@ async function largeBoard(base, cookie, count = 30) {
   return project;
 }
 
-async function rawStream(t, base, cookie, { paused = false } = {}) {
+async function rawStream(t, base, cookie, { paused = false, onData } = {}) {
   return new Promise((resolve, reject) => {
     const outgoing = request(
       base + '/api/events',
       { headers: { cookie } },
       (response) => {
         response.on('error', () => {}); // Server forcibly disconnects slow/revoked streams.
+        if (onData) response.on('data', onData);
         if (paused) response.pause();
         else response.resume();
         resolve(response);
@@ -135,12 +136,37 @@ test('paused SSE readers have bounded output and are disconnected while readers 
   const paused = await rawStream(t, base, slow, { paused: true });
   assert.equal(paused.statusCode, 200);
   const slowResponse = responses[0];
-  const activeStream = await rawStream(t, base, active);
-  assert.equal(activeStream.statusCode, 200);
-  let received = '';
-  activeStream.on('data', (part) => {
-    received = (received + part.toString()).slice(-1000000);
+  let pending = '',
+    latestName;
+  const activeStream = await rawStream(t, base, active, {
+    onData(part) {
+      pending += part.toString();
+      let boundary;
+      while ((boundary = pending.indexOf('\n\n')) !== -1) {
+        const event = pending.slice(0, boundary);
+        pending = pending.slice(boundary + 2);
+        if (!event.startsWith('event: state\n')) continue;
+        const state = JSON.parse(event.slice('event: state\ndata: '.length));
+        latestName = state.projects.find((p) => p.id === project.id)?.name;
+      }
+    },
   });
+  assert.equal(activeStream.statusCode, 200);
+  async function received(name) {
+    const deadline = Date.now() + 10000;
+    while (
+      latestName !== name &&
+      Date.now() < deadline &&
+      !activeStream.destroyed
+    )
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(
+      latestName,
+      name,
+      'active reader receives the complete state frame',
+    );
+  }
+  await received(project.name);
   let maxQueued = slowResponse.writableLength;
   for (let i = 0; i < 60; i++) {
     assert.equal(
@@ -154,6 +180,9 @@ test('paused SSE readers have bounded output and are disconnected while readers 
       200,
     );
     maxQueued = Math.max(maxQueued, slowResponse.writableLength);
+    // Pace the writer on actual consumption; a fast producer can overwhelm even
+    // a reading peer on a loaded runner, which is correctly disconnected.
+    await received(`Broadcast ${i}`);
   }
   assert.ok(
     maxQueued <= 1024 * 1024,
@@ -169,9 +198,9 @@ test('paused SSE readers have bounded output and are disconnected while readers 
     false,
     'reading stream remains connected',
   );
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.ok(
-    received.includes('Broadcast 59'),
+  assert.equal(
+    latestName,
+    'Broadcast 59',
     'active reader receives final update',
   );
 });
