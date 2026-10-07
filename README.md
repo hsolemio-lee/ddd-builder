@@ -306,3 +306,7 @@ OWNER_EMAIL=최초_관리자의_검증된_이메일
 MCP는 stdio 연결이므로 별도 인터넷 포트를 열지 않습니다. 웹과 MCP의 데이터 요청은 같은 HTTPS 서비스로 전달되며, 내부 앱 포트는 3210, Funnel의 공개 포트는 443입니다. `DDD_READ_ONLY=false`로 클라이언트 설정을 바꿔도 서버의 읽기 토큰 권한을 넘을 수 없습니다.
 
 보안 정책과 실제 운영 조건은 [SECURITY.md](SECURITY.md), [통제 현황](docs/security/controls.md), [운영 절차](docs/security/operations.md), [데이터 처리 정책](docs/security/privacy.md)를 확인하세요. 실제 공급자 로그인·관리자 MFA·보안 연락처·외부 암호화 백업·복원 훈련·경보를 완료하기 전에는 공식 출시 준비 완료로 판정하지 않습니다.
+
+## 라이선스
+
+DDD Builder의 소스 코드와 문서는 [MIT 라이선스](LICENSE)로 제공합니다. 상업적 이용·수정·재배포를 허용하며, 복제본이나 소프트웨어의 상당 부분에 저작권 표시와 라이선스 전문을 포함해야 합니다. 외부 의존성에는 각각의 라이선스가 적용됩니다.
