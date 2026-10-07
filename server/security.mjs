@@ -12,6 +12,7 @@ const defaults = {
   sessionLifetimeMs: 12 * 60 * 60 * 1000,
   maxSseClients: 200,
   maxSsePerSession: 5,
+  maxSseBufferBytes: 1024 * 1024,
 };
 
 export function securityOptions(options = {}) {

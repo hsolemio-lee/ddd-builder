@@ -67,7 +67,8 @@ async function stream(base, cookie) {
         }
       }
     } catch (error) {
-      if (error.name !== 'AbortError') throw error;
+      if (error.name !== 'AbortError' && error.cause?.code !== 'UND_ERR_SOCKET')
+        throw error;
     }
   })();
   return {
@@ -882,7 +883,11 @@ test('expired sessions reject requests and also close their active event streams
   let timer;
   const closed = await Promise.race([
     (async () => {
-      while (!(await reader.read()).done) {}
+      try {
+        while (!(await reader.read()).done) {}
+      } catch (error) {
+        assert.equal(error.cause?.code, 'UND_ERR_SOCKET');
+      }
       return true;
     })(),
     new Promise((resolve) => {

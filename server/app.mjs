@@ -271,27 +271,43 @@ export async function createApp({
     if (item) clearSession(token);
     return null;
   };
-  const emit = (client, name, value) =>
-    client.res.write(`event: ${name}\ndata: ${JSON.stringify(value)}\n\n`);
+  const frame = (name, value) =>
+    `event: ${name}\ndata: ${JSON.stringify(value)}\n\n`;
+  function disconnect(client) {
+    client.closing = true;
+    // Destroy queued bytes and the socket; end() can leave a paused peer alive.
+    // The close handler releases capacity only after the response closes.
+    client.res.destroy();
+  }
+  function send(client, output) {
+    if (client.closing || client.res.destroyed) return;
+    // Reserve chunk framing bytes as well as the application's event payload.
+    if (
+      client.res.writableLength + Buffer.byteLength(output) + 32 >
+      safeguards.maxSseBufferBytes
+    ) {
+      disconnect(client);
+      return;
+    }
+    client.res.write(output);
+  }
+  const emit = (client, name, value) => send(client, frame(name, value));
   function presence() {
     const unique = new Map();
     for (const c of clients)
-      if (sessions.has(c.token)) unique.set(c.user.id, c.user);
+      if (!c.closing && sessions.has(c.token)) unique.set(c.user.id, c.user);
     const people = [...unique.values()];
     for (const client of clients) emit(client, 'presence', people);
   }
   function broadcast() {
-    const state = store.state();
-    for (const client of clients) emit(client, 'state', state);
+    const output = frame('state', store.state());
+    for (const client of clients) send(client, output);
   }
   function clearSession(token) {
     sessions.delete(token);
     writeLimiter.delete(token);
     for (const client of clients)
-      if (client.token === token) {
-        clients.delete(client);
-        client.res.end();
-      }
+      if (client.token === token) disconnect(client);
     presence();
   }
   function pruneSessions() {
@@ -504,6 +520,14 @@ export async function createApp({
           sessionStreams >= safeguards.maxSsePerSession
         )
           rejectRateLimit();
+        const initial = frame('state', store.state());
+        if (Buffer.byteLength(initial) + 32 > safeguards.maxSseBufferBytes)
+          fail(413, '현재 보드가 실시간 연결의 출력 한도를 초과했습니다.');
+        const client = { res, user, token: signed.token, closing: false };
+        res.on('close', () => {
+          if (clients.delete(client)) presence();
+        });
+        clients.add(client);
         res.writeHead(200, {
           'content-type': 'text/event-stream; charset=utf-8',
           'cache-control': 'no-cache, no-transform',
@@ -511,13 +535,8 @@ export async function createApp({
           'x-accel-buffering': 'no',
         });
         res.flushHeaders();
-        const client = { res, user, token: signed.token };
-        clients.add(client);
-        emit(client, 'state', store.state());
+        send(client, initial);
         presence();
-        res.on('close', () => {
-          if (clients.delete(client)) presence();
-        });
         return;
       }
       if (path === '/api/projects' && method === 'POST') {
@@ -733,7 +752,7 @@ export async function createApp({
     apiLimiter.prune();
     loginLimiter.prune();
     writeLimiter.prune();
-    for (const client of clients) client.res.write(': heartbeat\n\n');
+    for (const client of clients) send(client, ': heartbeat\n\n');
   }, 15000);
   heartbeat.unref();
   try {
@@ -754,8 +773,7 @@ export async function createApp({
     close() {
       if (closing) return closing;
       clearInterval(heartbeat);
-      for (const client of clients) client.res.end();
-      clients.clear();
+      for (const client of clients) disconnect(client);
       sessions.clear();
       closing = new Promise((resolve, reject) => {
         server.close((error) => {
