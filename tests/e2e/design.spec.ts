@@ -127,6 +127,7 @@ test('text and Mermaid context sources persist independently and syntax errors p
   await page
     .getByRole('button', { name: '컨텍스트 나누기 단계', exact: true })
     .click();
+  await page.getByRole('button', { name: '카드 보기', exact: true }).click();
   await page
     .getByRole('button', { name: '카드 편집: 주문', exact: true })
     .click();
@@ -153,6 +154,7 @@ test('text and Mermaid context sources persist independently and syntax errors p
   await page
     .getByRole('button', { name: '컨텍스트 나누기 단계', exact: true })
     .click();
+  await page.getByRole('button', { name: '카드 보기', exact: true }).click();
   await expect(
     page.getByRole('img', { name: '컨텍스트 관계 다이어그램' }),
   ).toBeVisible();
@@ -216,6 +218,7 @@ test('untrusted Mermaid renders without active HTML, navigation or external reso
   await page
     .getByRole('button', { name: '컨텍스트 나누기 단계', exact: true })
     .click();
+  await page.getByRole('button', { name: '카드 보기', exact: true }).click();
   await expect(
     page.getByRole('img', { name: '컨텍스트 관계 다이어그램' }),
   ).toBeVisible({ timeout: 20000 });
@@ -227,4 +230,151 @@ test('untrusted Mermaid renders without active HTML, navigation or external reso
       .count(),
   ).toBe(0);
   expect(external).toBe(0);
+});
+
+test('context boundaries group real members, reveal crossing flows and preserve reassignment after reload', async ({
+  page,
+}) => {
+  await join(page);
+  const p = await project(page);
+  async function create(
+    kind: string,
+    title: string,
+    stage = 'events',
+    extra = {},
+  ) {
+    const r = await page.request.post(`/api/projects/${p.id}/cards`, {
+      data: { stage, kind, title, ...extra },
+    });
+    expect(r.status()).toBe(201);
+    return r.json();
+  }
+  const order = await create('context', '주문', 'contexts', {
+    description: '주문 접수와 이행 판단',
+    position: 0,
+  });
+  const stock = await create('context', '재고', 'contexts', {
+    description: 'SKU별 확보와 해제',
+    position: 1,
+    links: [{ kind: 'related', targetId: order.id }],
+  });
+  await create('context', '배송', 'contexts', {
+    description: '출고와 택배 인계',
+    position: 2,
+  });
+  const reserved = await create('event', '재고 예약 완료', 'events', {
+    contextId: stock.id,
+  });
+  const command = await create('command', '재고 예약', 'events', {
+    contextId: stock.id,
+    links: [{ kind: 'flow', targetId: reserved.id }],
+  });
+  await create('policy', '주문 접수 후 예약', 'events', {
+    contextId: order.id,
+    links: [{ kind: 'flow', targetId: command.id }],
+  });
+  await create('event', '주문 접수 완료', 'events', { contextId: order.id });
+  await create('aggregate', 'Order', 'aggregates', {
+    contextId: order.id,
+    data: { root: 'Order', invariants: '항목이 한 개 이상이다' },
+  });
+  const question = await create('question', '예약 시간은 얼마인가?');
+  await page
+    .getByRole('button', { name: '컨텍스트 나누기 단계', exact: true })
+    .click();
+  await expect(
+    page.getByRole('button', { name: '경계 보기', exact: true }),
+  ).toHaveAttribute('aria-pressed', 'true');
+  const orderRegion = page.getByRole('region', {
+    name: '컨텍스트 영역: 주문',
+    exact: true,
+  });
+  await expect(
+    orderRegion.getByRole('button', { name: '경계 카드: Order', exact: true }),
+  ).toBeVisible();
+  await expect(orderRegion).toContainText('이벤트 1');
+  await expect(orderRegion).toContainText('애그리게이트 1');
+  await expect(
+    page.getByRole('region', { name: '컨텍스트 영역: 배송', exact: true }),
+  ).toContainText('내부 카드 0개');
+  await expect(page.locator('.context-map-lines > path')).toHaveCount(1);
+  expect(
+    await page
+      .locator('.context-map-lines > path')
+      .getAttribute('marker-start'),
+  ).toBeNull();
+  expect(
+    await page.locator('.context-map-lines > path').getAttribute('marker-end'),
+  ).toContain('url(#');
+  await page
+    .getByRole('button', {
+      name: '경계 연결: 주문 · 재고, 흐름 1개',
+      exact: true,
+    })
+    .click();
+  const flows = page.getByRole('region', {
+    name: '경계 연결 상세',
+    exact: true,
+  });
+  await expect(flows).toContainText('주문 → 재고');
+  await expect(flows).toContainText('주문 접수 후 예약');
+  await expect(flows).toContainText('재고 예약');
+  await page
+    .getByRole('button', { name: '미분류 1개 보기', exact: true })
+    .click();
+  await page
+    .getByLabel('경계 배치: 예약 시간은 얼마인가?', { exact: true })
+    .selectOption(order.id);
+  await expect
+    .poll(async () => {
+      const state = await (await page.request.get('/api/state')).json();
+      return state.cards.find((c: { id: string }) => c.id === question.id)
+        .contextId;
+    })
+    .toBe(order.id);
+  await page.reload();
+  await page
+    .getByRole('button', { name: '컨텍스트 나누기 단계', exact: true })
+    .click();
+  await page
+    .getByRole('button', { name: '주문 내부 카드 전체 보기', exact: true })
+    .click();
+  const inside = page.getByRole('region', {
+    name: '주문 내부 카드',
+    exact: true,
+  });
+  await expect(
+    inside.getByLabel('경계 배치: 예약 시간은 얼마인가?', { exact: true }),
+  ).toHaveValue(order.id);
+  await page.getByLabel('카드 검색', { exact: true }).fill('예약 시간');
+  await expect(
+    page.getByRole('region', { name: '컨텍스트 영역: 배송', exact: true }),
+  ).toBeVisible();
+  await expect(
+    inside.getByRole('button', {
+      name: '경계 카드: 예약 시간은 얼마인가?',
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page.getByLabel('카드 검색', { exact: true }).fill('');
+  await page
+    .getByRole('button', { name: '경계 상세 닫기', exact: true })
+    .click();
+  await page.screenshot({
+    path: 'test-results/context-boundaries.png',
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(
+    page.getByRole('region', { name: '컨텍스트 영역: 주문', exact: true }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: 'test-results/context-boundaries-mobile.png',
+    fullPage: true,
+  });
 });

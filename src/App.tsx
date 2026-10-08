@@ -33,6 +33,7 @@ import AccessDialog from './components/AccessDialog';
 import SecurityDialog from './components/SecurityDialog';
 import FlowBoard from './components/FlowBoard';
 import DesignReview from './components/DesignReview';
+import ContextMap from './components/ContextMap';
 import { normalizeCard, statuses, scenarios } from '../shared/design.mjs';
 
 function normalizeWorkspace(value: Workspace): Workspace {
@@ -68,7 +69,7 @@ export default function App() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [contextFilter, setContextFilter] = useState('all');
   const [scenarioFilter, setScenarioFilter] = useState('all');
-  const [view, setView] = useState<'cards' | 'flow'>('cards');
+  const [view, setView] = useState<'cards' | 'flow' | 'map'>('cards');
   const [reviewOpen, setReviewOpen] = useState(false);
   const [notice, setNotice] = useState('');
   const [receivedState, setReceivedState] = useState(false);
@@ -232,19 +233,44 @@ export default function App() {
           .toLowerCase()
           .includes(query.toLowerCase())),
   );
+  const mapContexts = projectCards.filter((c) => c.kind === 'context');
+  const mapScope = projectCards.filter((c) =>
+    stage === 'contexts'
+      ? c.stage === 'events' || c.stage === 'aggregates'
+      : c.stage === 'events',
+  );
+  const mapMembers = mapScope.filter(
+    (c) =>
+      (statusFilter === 'all' || c.status === statusFilter) &&
+      (stage === 'contexts' || filter === 'all' || c.kind === filter) &&
+      (contextFilter === 'all' ||
+        (contextFilter === 'none'
+          ? !c.contextId
+          : c.contextId === contextFilter)) &&
+      (stage !== 'events' ||
+        scenarioFilter === 'all' ||
+        c.scenario === scenarioFilter ||
+        c.scenario === 'shared') &&
+      (!query ||
+        `${c.title} ${c.description} ${c.decision} ${Object.values(c.data).join(' ')} ${mapContexts.find((ctx) => ctx.id === c.contextId)?.title || ''}`
+          .toLowerCase()
+          .includes(query.toLowerCase())),
+  );
+  const shownCount = view === 'map' ? mapMembers.length : displayedCards.length;
+  const totalCount = view === 'map' ? mapScope.length : stageCards.length;
   function openCard(card: Card) {
     if (canEdit)
       setEditor({ card, stage: card.stage, projectId: card.projectId });
     else setDetails(card);
   }
-  function resetDesignFilters() {
+  function resetDesignFilters(nextStage = stage) {
     setStatusFilter('all');
     setContextFilter('all');
     setScenarioFilter('all');
-    setView('cards');
+    setView(nextStage === 'contexts' ? 'map' : 'cards');
   }
   function navigate(next: Stage) {
-    resetDesignFilters();
+    resetDesignFilters(next);
     setStage(next);
     setFilter('all');
     setQuery('');
@@ -665,6 +691,13 @@ export default function App() {
                     aria-label="보드 보기"
                   >
                     <button
+                      className={view === 'map' ? 'active' : ''}
+                      aria-pressed={view === 'map'}
+                      onClick={() => setView('map')}
+                    >
+                      경계 보기
+                    </button>
+                    <button
                       className={view === 'cards' ? 'active' : ''}
                       aria-pressed={view === 'cards'}
                       onClick={() => setView('cards')}
@@ -740,10 +773,11 @@ export default function App() {
                   설계 점검
                 </button>
                 <span className="visible-count">
-                  {displayedCards.length}/{stageCards.length}개 표시
+                  {shownCount}/{totalCount}개
+                  {view === 'map' ? ' 내부 카드' : ''} 표시
                 </span>
               </div>
-              {displayedCards.length === 0 &&
+              {shownCount === 0 &&
                 (query ||
                   filter !== 'all' ||
                   statusFilter !== 'all' ||
@@ -772,8 +806,27 @@ export default function App() {
                   onOpen={openCard}
                 />
               )}
-              {view === 'flow' &&
+              {view === 'map' &&
               (stage === 'events' || stage === 'contexts') ? (
+                <ContextMap
+                  key={`${project.id}:${stage}`}
+                  contexts={mapContexts}
+                  members={mapMembers}
+                  connected={connected}
+                  pending={pending}
+                  readOnly={!canEdit}
+                  onOpen={openCard}
+                  onPatch={patch}
+                  onAdd={() =>
+                    setEditor({
+                      stage: 'contexts',
+                      kind: 'context',
+                      projectId: project.id,
+                    })
+                  }
+                />
+              ) : view === 'flow' &&
+                (stage === 'events' || stage === 'contexts') ? (
                 <FlowBoard
                   cards={displayedCards}
                   allCards={projectCards}

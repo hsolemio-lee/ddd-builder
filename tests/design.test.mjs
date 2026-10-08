@@ -7,6 +7,7 @@ import { createApp } from '../server/app.mjs';
 import { openStore } from '../server/store.mjs';
 import { reviewBoard } from '../shared/design.mjs';
 import { layoutFlow } from '../shared/flow.mjs';
+import { buildContextMap, layoutContextMap } from '../shared/context-map.mjs';
 async function setup(t) {
   const dataDir = await mkdtemp(join(tmpdir(), 'ddd-design-'));
   const app = await createApp({ dataDir, code: 'design-tests' });
@@ -289,4 +290,111 @@ test('flow layout supports retry loops and ignores targets outside the filtered 
   const filtered = layoutFlow(cards.slice(0, 2));
   assert.equal(filtered.edges.length, 1);
   assert.equal(filtered.nodes.length, 2);
+});
+
+test('context regions preserve ownership, empty boundaries and directional cross-boundary flows', () => {
+  const contexts = ['주문', '결제', '재고', '배송'].map((title, i) => ({
+    id: 'c' + i,
+    title,
+    kind: 'context',
+    stage: 'contexts',
+    position: i,
+    links: [],
+  }));
+  contexts[0].links = [{ kind: 'related', targetId: 'c1' }];
+  const members = [
+    {
+      id: 'a',
+      stage: 'events',
+      kind: 'command',
+      contextId: 'c0',
+      position: 1,
+      links: [
+        { kind: 'flow', targetId: 'b' },
+        { kind: 'related', targetId: 'stock' },
+      ],
+    },
+    {
+      id: 'b',
+      stage: 'events',
+      kind: 'event',
+      contextId: 'c1',
+      position: 2,
+      links: [{ kind: 'flow', targetId: 'a' }],
+    },
+    {
+      id: 'local',
+      stage: 'events',
+      kind: 'event',
+      contextId: 'c0',
+      position: 3,
+      links: [{ kind: 'flow', targetId: 'a' }],
+    },
+    {
+      id: 'aggregate',
+      stage: 'aggregates',
+      kind: 'aggregate',
+      contextId: 'c0',
+      position: 4,
+      links: [],
+    },
+    {
+      id: 'stock',
+      stage: 'events',
+      kind: 'event',
+      contextId: 'c2',
+      position: 5,
+      links: [],
+    },
+    {
+      id: 'unknown',
+      stage: 'events',
+      kind: 'question',
+      contextId: 'deleted',
+      position: 6,
+      links: [],
+    },
+    {
+      id: 'unassigned',
+      stage: 'events',
+      kind: 'question',
+      contextId: null,
+      position: 7,
+      links: [],
+    },
+  ];
+  const map = buildContextMap(contexts, members);
+  assert.equal(map.groups.length, 4);
+  assert.deepEqual(
+    map.groups[0].members.map((c) => c.id),
+    ['a', 'local', 'aggregate'],
+  );
+  assert.equal(map.groups[3].members.length, 0);
+  assert.deepEqual(
+    map.unassigned.map((c) => c.id),
+    ['unknown', 'unassigned'],
+  );
+  assert.equal(map.connections.length, 1);
+  assert.equal(map.connections[0].forward.declared, true);
+  assert.deepEqual(map.connections[0].forward.flows, [
+    { source: 'a', target: 'b' },
+  ]);
+  assert.deepEqual(map.connections[0].reverse.flows, [
+    { source: 'b', target: 'a' },
+  ]);
+  const filtered = buildContextMap(
+    contexts,
+    members.filter((c) => c.id !== 'b'),
+  );
+  assert.equal(filtered.groups.length, 4);
+  assert.equal(filtered.connections[0].forward.flows.length, 0);
+  assert.equal(filtered.connections[0].forward.declared, true);
+  const layout = layoutContextMap(map.groups, map.connections);
+  assert.equal(layout.nodes.length, 4);
+  for (const node of layout.nodes) {
+    assert.ok(node.x + 320 <= layout.width);
+    assert.ok(node.y + 248 <= layout.height);
+  }
+  assert.equal(layout.edges.length, 1);
+  assert.equal(layoutContextMap([], []).edges.length, 0);
 });

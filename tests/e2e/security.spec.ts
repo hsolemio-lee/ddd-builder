@@ -48,16 +48,25 @@ test('OIDC login uses the configured account provider without a shared code', as
 test('viewer can inspect cards but cannot edit, reorder, or manage project access', async ({
   page,
 }) => {
+  const context = {
+    ...card,
+    id: 'viewer-context',
+    stage: 'contexts',
+    kind: 'context',
+    title: '주문',
+    description: '주문 책임 경계',
+  };
+  const viewerCards = [context, { ...card, contextId: context.id }];
   await page.route('**/api/session', (route) =>
     route.fulfill({ json: { user } }),
   );
   await page.route('**/api/state', (route) =>
-    route.fulfill({ json: { projects: [project], cards: [card] } }),
+    route.fulfill({ json: { projects: [project], cards: viewerCards } }),
   );
   await page.route('**/api/events', (route) =>
     route.fulfill({
       contentType: 'text/event-stream',
-      body: `event: state\ndata: ${JSON.stringify({ projects: [project], cards: [card] })}\n\nevent: presence\ndata: []\n\n`,
+      body: `event: state\ndata: ${JSON.stringify({ projects: [project], cards: viewerCards })}\n\nevent: presence\ndata: []\n\n`,
     }),
   );
   await page.goto('/');
@@ -76,6 +85,24 @@ test('viewer can inspect cards but cannot edit, reorder, or manage project acces
   await expect(
     page.getByRole('button', { name: '저장하기', exact: true }),
   ).toHaveCount(0);
+  await page.getByRole('button', { name: '닫기', exact: true }).click();
+  await page
+    .getByRole('button', { name: '컨텍스트 나누기 단계', exact: true })
+    .click();
+  await expect(
+    page.getByRole('button', { name: '컨텍스트 편집: 주문', exact: true }),
+  ).toHaveCount(0);
+  await page
+    .getByRole('button', { name: '주문 내부 카드 전체 보기', exact: true })
+    .click();
+  await expect(
+    page.getByLabel(`경계 배치: ${card.title}`, { exact: true }),
+  ).toBeDisabled();
+  await page
+    .getByRole('region', { name: '주문 내부 카드', exact: true })
+    .getByRole('button', { name: `경계 카드: ${card.title}`, exact: true })
+    .click();
+  await expect(page.getByRole('dialog', { name: card.title })).toBeVisible();
 });
 
 test('official logout clears browser identity and selected project', async ({
