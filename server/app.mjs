@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { handleMcpHttp } from '../mcp/http.mjs';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { resolve, sep, extname } from 'node:path';
@@ -389,7 +390,7 @@ export async function createApp({
         path = url.pathname,
         method = req.method;
       const secureCookie = secureRequest ? '; Secure' : '';
-      if (!path.startsWith('/api/')) {
+      if (!path.startsWith('/api/') && path !== '/mcp') {
         if (!['GET', 'HEAD'].includes(method) || !staticDir)
           fail(404, '파일을 찾을 수 없습니다.');
         let decoded;
@@ -440,13 +441,20 @@ export async function createApp({
       const peer = req.socket.remoteAddress || 'unknown';
       pruneSessions();
       let validOrigin = true;
-      if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && req.headers.origin) {
+      if (
+        (path === '/mcp' || !['GET', 'HEAD', 'OPTIONS'].includes(method)) &&
+        req.headers.origin
+      ) {
         try {
           const origin = new URL(req.headers.origin);
           validOrigin =
             origin.origin === req.headers.origin &&
-            (origin.origin === requestOrigin ||
-              origin.origin === publicAddress?.origin);
+            (path === '/mcp'
+              ? origin.origin ===
+                (publicAddress?.origin ||
+                  `http://${host.includes(':') ? `[${host}]` : host}:${server.address().port}`)
+              : origin.origin === requestOrigin ||
+                origin.origin === publicAddress?.origin);
         } catch {
           validOrigin = false;
         }
@@ -469,6 +477,39 @@ export async function createApp({
       ) {
         const writeRetry = writeLimiter.consume(signed.token);
         if (writeRetry) rejectRateLimit(writeRetry);
+      }
+      if (path === '/mcp') {
+        if (!identity)
+          fail(404, 'HTTP MCP는 개인 토큰 인증 모드에서 사용할 수 있습니다.');
+        if (!signed?.bearer) fail(401, '개인 MCP Bearer 토큰이 필요합니다.');
+        identity.project(signed, signed.projectId, 'viewer');
+        if (method !== 'POST') {
+          res.setHeader('allow', 'POST');
+          fail(405, 'HTTP MCP는 POST 요청을 사용합니다.');
+        }
+        if (
+          req.headers['content-type']?.split(';')[0].trim().toLowerCase() !==
+          'application/json'
+        )
+          fail(415, 'application/json 요청이 필요합니다.');
+        const payload = await body(req);
+        // Recheck after reading the body: the credential may have been revoked.
+        identity.project(signed, signed.projectId, 'viewer');
+        const address = server.address();
+        const localHost =
+          host === '0.0.0.0'
+            ? '127.0.0.1'
+            : host === '::'
+              ? '[::1]'
+              : host.includes(':')
+                ? `[${host}]`
+                : host;
+        await handleMcpHttp(req, res, payload, {
+          url: `http://${localHost}:${address.port}`,
+          token: signed.token,
+          readOnly: signed.scope !== 'write',
+        });
+        return;
       }
       if (path === '/api/auth/config' && method === 'GET') {
         json(res, 200, {
@@ -587,6 +628,13 @@ export async function createApp({
             },
           ),
           runtime: mcpContainerName ? 'docker' : 'local',
+          ...(identity
+            ? {
+                mcpHttp: {
+                  url: `${publicAddress?.origin || requestOrigin}/mcp`,
+                },
+              }
+            : {}),
           mcp: {
             command: mcpContainerName ? 'docker' : process.execPath,
             args: [

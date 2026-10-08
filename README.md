@@ -119,7 +119,7 @@ tailscale funnel --https=443 off
 
 공개 DNS 반영에는 최대 10분이 걸릴 수 있습니다. 사내 접속을 비교하려면 먼저 휴대폰 모바일 데이터에서 같은 주소를 확인하세요. 호스트 자체의 Tailscale 연결을 통한 접속 성공만으로 공개 인터넷 접속을 확인할 수는 없습니다.
 
-MCP는 **stdio 방식이므로 별도의 공개 포트가 없습니다**. 호스트에서는 앱의 Docker MCP 설정을 그대로 사용합니다. 다른 컴퓨터의 AI 클라이언트에는 저장소와 Node 24 이상을 준비하고 `npm ci`를 실행한 뒤, 해당 컴퓨터의 `mcp/index.mjs`를 실행하도록 설정합니다. `DDD_URL`은 Funnel의 HTTPS 주소, `DDD_CODE`는 기존 앱 접속 코드입니다. MCP 프로세스가 공개 HTTPS 주소의 **443** 포트로 앱 API에 연결합니다. 클라우드 AI용 HTTP MCP 엔드포인트는 제공하지 않습니다.
+MCP는 기존 **stdio**와 개인 토큰 인증 모드의 **Streamable HTTP(`/mcp`)**를 지원하며, 기존 웹 포트를 함께 사용합니다. 호스트에서는 앱의 Docker MCP 설정을 그대로 사용합니다. 다른 컴퓨터의 AI 클라이언트에는 저장소와 Node 24 이상을 준비하고 `npm ci`를 실행한 뒤, 해당 컴퓨터의 `mcp/index.mjs`를 실행하도록 설정합니다. `DDD_URL`은 Funnel의 HTTPS 주소, `DDD_CODE`는 기존 앱 접속 코드입니다. MCP 프로세스가 공개 HTTPS 주소의 **443** 포트로 앱 API에 연결합니다. 개인 토큰 인증 모드에서는 아래 HTTP MCP 설정으로 직접 연결할 수 있습니다.
 
 공식 안내: [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel).
 
@@ -167,7 +167,7 @@ npm start
 
 ## 외부 AI와 MCP로 협업하기
 
-MCP 서버는 **stdio 전송**을 사용합니다. 앱이 AI 모델을 실행하거나 API 키를 관리하지는 않습니다. 연결한 AI 클라이언트의 모델이 보드를 분석합니다.
+MCP 서버는 **stdio 전송**과 개인 토큰 인증 모드의 **Streamable HTTP 전송**을 지원합니다. 앱이 AI 모델을 실행하거나 API 키를 관리하지는 않습니다. 연결한 AI 클라이언트의 모델이 보드를 분석합니다.
 
 1. DDD Builder 앱 서버를 실행해 둡니다.
 2. 앱 왼쪽의 **AI와 함께 설계하기**를 엽니다.
@@ -207,7 +207,7 @@ MCP 서버는 **stdio 전송**을 사용합니다. 앱이 AI 모델을 실행하
 
 예: “주문 서비스의 이벤트 스토밍 결과를 읽고, 중복 이벤트와 빠진 명령·정책을 찾아 줘. 바운디드 컨텍스트 경계와 애그리게이트를 제안해 줘. 먼저 제안을 보여 준 다음, 내가 요청하면 보드를 수정해 줘.”
 
-다른 컴퓨터의 로컬 AI 클라이언트에서도 연결할 수 있습니다. 그 컴퓨터에 이 프로젝트와 Node를 준비하고 `npm ci`를 실행한 다음, MCP 설정의 실행 경로를 해당 컴퓨터의 경로로 바꾸고 `DDD_URL`을 호스트의 로컬 네트워크 주소로 변경합니다. `DDD_CODE`는 같은 접속 코드를 사용합니다. 클라우드 AI가 직접 접속할 공개 HTTP MCP 엔드포인트는 제공하지 않습니다.
+다른 컴퓨터의 로컬 AI 클라이언트에서도 연결할 수 있습니다. 그 컴퓨터에 이 프로젝트와 Node를 준비하고 `npm ci`를 실행한 다음, MCP 설정의 실행 경로를 해당 컴퓨터의 경로로 바꾸고 `DDD_URL`을 호스트의 로컬 네트워크 주소로 변경합니다. `DDD_CODE`는 같은 접속 코드를 사용합니다. 공유 코드 개발 모드에서는 stdio를 사용합니다. 개인 토큰 인증 모드에서는 `/mcp`에 직접 연결할 수 있습니다.
 
 MCP 공식 개념과 연결 방식: [MCP 서버 개발 가이드](https://modelcontextprotocol.io/docs/develop/build-server).
 
@@ -260,7 +260,7 @@ npm run test:e2e
 npm run test:docker
 ```
 
-Node 테스트는 임시 폴더에서 실제 HTTP와 MCP 클라이언트를 사용해 인증, 보안 헤더, 요청·세션·SSE 한도, 저장 복구, 충돌, 동시 요청, 내보내기와 stdio 연결을 검증합니다. 브라우저 테스트는 별도 포트 `3211`과 `test-results/e2e-data`를 사용합니다.
+Node 테스트는 임시 폴더에서 실제 HTTP와 MCP 클라이언트를 사용해 인증, 보안 헤더, 요청·세션·SSE 한도, 저장 복구, 충돌, 동시 요청, 내보내기, stdio 및 HTTP MCP 연결과 토큰 격리를 검증합니다. 브라우저 테스트는 별도 포트 `3211`과 `test-results/e2e-data`를 사용합니다.
 
 ## 공식 서비스 인증과 보안
 
@@ -303,7 +303,30 @@ OWNER_EMAIL=최초_관리자의_검증된_이메일
 }
 ```
 
-MCP는 stdio 연결이므로 별도 인터넷 포트를 열지 않습니다. 웹과 MCP의 데이터 요청은 같은 HTTPS 서비스로 전달되며, 내부 앱 포트는 3210, Funnel의 공개 포트는 443입니다. `DDD_READ_ONLY=false`로 클라이언트 설정을 바꿔도 서버의 읽기 토큰 권한을 넘을 수 없습니다.
+stdio와 HTTP MCP 모두 별도 인터넷 포트를 열 필요가 없습니다. 웹과 MCP의 데이터 요청은 같은 HTTPS 서비스로 전달되며, 내부 앱 포트는 3210, Funnel의 공개 포트는 443입니다. `DDD_READ_ONLY=false`로 클라이언트 설정을 바꿔도 서버의 읽기 토큰 권한을 넘을 수 없습니다.
+
+### HTTP MCP로 직접 연결하기
+
+개인 계정 인증(`AUTH_MODE=oidc`)에서는 **외부 AI 연결 → HTTP · 원격 URL 연결**을 선택하고 개인 토큰을 생성합니다. Streamable HTTP와 사용자 지정 Authorization 헤더를 지원하는 클라이언트는 로컬 Node나 저장소 설치 없이 연결할 수 있습니다. 예시 설정이며 필드 이름은 사용하는 클라이언트에 맞춰 조정하세요.
+
+```json
+{
+  "mcpServers": {
+    "ddd-builder": {
+      "url": "https://your-service.example/mcp",
+      "headers": {
+        "Authorization": "Bearer 앱에서_생성한_개인_토큰"
+      }
+    }
+  }
+}
+```
+
+`PUBLIC_URL`을 실제 HTTPS 서비스 주소로 설정하면 화면에 해당 `/mcp` 주소가 표시됩니다. Docker와 Funnel에서도 기존 웹 포트를 사용합니다. 개인 토큰은 모든 요청에서 검증하며 프로젝트 범위, 만료, 철회 및 현재 멤버 권한을 적용합니다. 읽기 토큰에는 조회 도구만 제공하고 쓰기 토큰에는 카드 생성·수정 도구를 추가합니다.
+
+HTTP MCP는 요청별 서버를 사용하는 stateless 방식이며 POST에 JSON 응답을 반환합니다. 별도 MCP 세션이나 장기 SSE 연결은 만들지 않습니다. Origin이 있으면 설정된 서비스 주소와 일치해야 합니다. 공유 코드(`AUTH_MODE=legacy`)와 브라우저 세션 쿠키는 HTTP MCP 인증으로 받지 않습니다. 기존 stdio 설정은 계속 사용할 수 있습니다.
+
+이 엔드포인트는 개인 Bearer 토큰 방식이며 MCP OAuth 자동 로그인·토큰 발급 탐색은 제공하지 않습니다. 웹 계정의 OIDC 로그인과는 별개입니다. OAuth만 지원하고 사용자 지정 Bearer 헤더를 지원하지 않는 클라이언트는 현재 직접 연결할 수 없습니다.
 
 보안 정책과 실제 운영 조건은 [SECURITY.md](SECURITY.md), [통제 현황](docs/security/controls.md), [운영 절차](docs/security/operations.md), [데이터 처리 정책](docs/security/privacy.md)를 확인하세요. 실제 공급자 로그인·관리자 MFA·보안 연락처·외부 암호화 백업·복원 훈련·경보를 완료하기 전에는 공식 출시 준비 완료로 판정하지 않습니다.
 

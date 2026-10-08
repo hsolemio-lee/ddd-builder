@@ -783,3 +783,187 @@ test('failed login audit rolls back first owner bootstrap and invitation accepta
     1,
   );
 });
+
+test('HTTP MCP isolates credentials, preserves tools and resources, and enforces revocation', async (t) => {
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+  const { StreamableHTTPClientTransport } =
+    await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
+  const s = await setup(t);
+  const owner = await login(s.base, s.fixture);
+  const project = (await s.request('/state', owner.cookie)).value.projects[0];
+  const other = (
+    await s.request('/projects', owner.cookie, 'POST', { name: 'Other' })
+  ).value;
+  async function mint(projectId, scope) {
+    return (
+      await s.request('/tokens', owner.cookie, 'POST', {
+        name: 'HTTP',
+        projectId,
+        scope,
+      })
+    ).value;
+  }
+  const read = await mint(project.id, 'read');
+  const write = await mint(other.id, 'write');
+  async function connect(token) {
+    const client = new Client({ name: 'http-test', version: '1.0.0' });
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(s.base + '/mcp'), {
+        requestInit: { headers: { Authorization: `Bearer ${token}` } },
+      }),
+    );
+    t.after(() => client.close());
+    return client;
+  }
+  const reader = await connect(read.token);
+  const writer = await connect(write.token);
+  assert.deepEqual(
+    (await reader.listTools()).tools.map((x) => x.name),
+    ['list_projects', 'get_project_board'],
+  );
+  assert.equal((await writer.listTools()).tools.length, 4);
+  const [a, b] = await Promise.all([
+    reader.callTool({ name: 'list_projects' }),
+    writer.callTool({ name: 'list_projects' }),
+  ]);
+  assert.deepEqual(
+    JSON.parse(a.content[0].text).map((x) => x.id),
+    [project.id],
+  );
+  assert.deepEqual(
+    JSON.parse(b.content[0].text).map((x) => x.id),
+    [other.id],
+  );
+  const resource = await reader.readResource({ uri: 'ddd://projects' });
+  assert.equal(JSON.parse(resource.contents[0].text)[0].id, project.id);
+  assert.equal(
+    (
+      await reader.getPrompt({
+        name: 'analyze_event_storming',
+        arguments: { projectId: project.id },
+      })
+    ).messages.length,
+    1,
+  );
+  const args = {
+    projectId: other.id,
+    stage: 'events',
+    kind: 'event',
+    title: 'HTTP created',
+  };
+  assert.equal(
+    (await reader.callTool({ name: 'create_card', arguments: args })).isError,
+    true,
+  );
+  const created = await writer.callTool({
+    name: 'create_card',
+    arguments: args,
+  });
+  assert.ok(!created.isError);
+  const card = JSON.parse(created.content[0].text);
+  const updated = await writer.callTool({
+    name: 'update_card',
+    arguments: {
+      cardId: card.id,
+      revision: card.revision,
+      title: 'Updated via HTTP',
+    },
+  });
+  assert.equal(JSON.parse(updated.content[0].text).title, 'Updated via HTTP');
+  assert.equal(
+    (
+      await writer.callTool({
+        name: 'create_card',
+        arguments: { ...args, projectId: project.id },
+      })
+    ).isError,
+    true,
+  );
+  assert.equal(
+    (await s.request('/info', owner.cookie)).value.mcpHttp.url,
+    s.base + '/mcp',
+  );
+  await s.request(`/tokens/${read.credential.id}`, owner.cookie, 'DELETE');
+  await assert.rejects(reader.listTools());
+  assert.equal((await writer.listTools()).tools.length, 4);
+});
+
+test('HTTP MCP rejects cookies, invalid origins, unsupported methods and oversized bodies', async (t) => {
+  const s = await setup(t);
+  const owner = await login(s.base, s.fixture);
+  const project = (await s.request('/state', owner.cookie)).value.projects[0];
+  const minted = (
+    await s.request('/tokens', owner.cookie, 'POST', {
+      name: 'HTTP',
+      projectId: project.id,
+      scope: 'read',
+    })
+  ).value;
+  const headers = {
+    authorization: `Bearer ${minted.token}`,
+    'content-type': 'application/json',
+    accept: 'application/json, text/event-stream',
+  };
+  const payload = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/list',
+  });
+  const request = (overrides = {}) =>
+    fetch(s.base + '/mcp', {
+      method: 'POST',
+      headers,
+      body: payload,
+      ...overrides,
+    });
+  assert.equal(
+    (
+      await request({
+        headers: { cookie: owner.cookie, 'content-type': 'application/json' },
+      })
+    ).status,
+    401,
+  );
+  assert.equal(
+    (
+      await request({
+        headers: { ...headers, authorization: 'Bearer invalid' },
+      })
+    ).status,
+    401,
+  );
+  assert.equal(
+    (await request({ headers: { ...headers, origin: 'https://evil.example' } }))
+      .status,
+    403,
+  );
+  assert.equal(
+    (
+      await request({
+        method: 'GET',
+        body: undefined,
+        headers: { ...headers, origin: 'https://evil.example' },
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (await request({ headers: { ...headers, origin: s.base } })).status,
+    200,
+  );
+  assert.equal((await request({ method: 'GET', body: undefined })).status, 405);
+  assert.equal(
+    (await request({ headers: { ...headers, 'content-type': 'text/plain' } }))
+      .status,
+    415,
+  );
+  assert.equal((await request({ body: '{' })).status, 400);
+  assert.equal(
+    (
+      await request({
+        body: JSON.stringify({ padding: 'x'.repeat(129 * 1024) }),
+      })
+    ).status,
+    400,
+  );
+});

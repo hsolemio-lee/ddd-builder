@@ -26,6 +26,7 @@ type Credential = {
 type Info = {
   urls: string[];
   runtime?: string;
+  mcpHttp?: { url: string };
   mcp: { command: string; args: string[]; env: Record<string, string> };
 };
 const roleNames = { admin: '관리자', editor: '편집자', viewer: '조회자' };
@@ -40,6 +41,7 @@ export default function AccessDialog({
   onClose: () => void;
 }) {
   const [info, setInfo] = useState<Info>();
+  const [transport, setTransport] = useState<'http' | 'stdio'>('http');
   const [members, setMembers] = useState<Member[]>([]);
   const [invites, setInvites] = useState<Invitation[]>([]);
   const [tokens, setTokens] = useState<Credential[]>([]);
@@ -140,18 +142,26 @@ export default function AccessDialog({
       ? JSON.stringify(
           {
             mcpServers: {
-              'ddd-builder': {
-                ...info.mcp,
-                env: {
-                  ...Object.fromEntries(
-                    Object.entries(info.mcp.env).filter(
-                      ([key]) => key !== 'DDD_CODE',
-                    ),
-                  ),
-                  DDD_TOKEN: freshToken,
-                  DDD_READ_ONLY: String(freshCredential?.scope !== 'write'),
-                },
-              },
+              'ddd-builder':
+                transport === 'http' && info.mcpHttp
+                  ? {
+                      url: info.mcpHttp.url,
+                      headers: { Authorization: `Bearer ${freshToken}` },
+                    }
+                  : {
+                      ...info.mcp,
+                      env: {
+                        ...Object.fromEntries(
+                          Object.entries(info.mcp.env).filter(
+                            ([key]) => key !== 'DDD_CODE',
+                          ),
+                        ),
+                        DDD_TOKEN: freshToken,
+                        DDD_READ_ONLY: String(
+                          freshCredential?.scope !== 'write',
+                        ),
+                      },
+                    },
             },
           },
           null,
@@ -299,6 +309,21 @@ export default function AccessDialog({
               선택한 프로젝트에만 접근하는 개인 토큰을 만듭니다. 토큰이
               만료되거나 철회되면 AI의 접근도 중단됩니다.
             </p>
+            <label>
+              연결 방식
+              <select
+                value={transport}
+                onChange={(e) =>
+                  setTransport(e.target.value as 'http' | 'stdio')
+                }
+              >
+                <option value="http">HTTP · 원격 URL 연결</option>
+                <option value="stdio">stdio · 로컬 프로세스 실행</option>
+              </select>
+            </label>
+            {transport === 'http' && info?.mcpHttp && (
+              <p className="dialog-note">접속 주소: {info.mcpHttp.url}</p>
+            )}
             <form className="login-form access-form" onSubmit={createToken}>
               <label>
                 연결 이름
@@ -392,10 +417,11 @@ export default function AccessDialog({
               </div>
             ))}
             <p className="dialog-note">
-              MCP는 AI 클라이언트가 실행하는 stdio 방식으로 별도 공개 포트가
-              필요 없습니다. 같은 호스트에서는 위 Docker/Node 명령을 사용합니다.
-              다른 컴퓨터에서는 저장소를 설치하고 로컬 mcp/index.mjs를 실행하며
-              DDD_URL에 공개 HTTPS 주소를 지정해 주세요.
+              HTTP는 Streamable HTTP와 Bearer 헤더를 지원하는 AI 클라이언트에서
+              URL과 개인 토큰으로 연결합니다. 별도 로컬 설치가 필요 없습니다.
+              설정 형식은 클라이언트에 따라 다를 수 있으며 OAuth 자동 로그인은
+              지원하지 않습니다. stdio는 같은 호스트의 Docker/Node 명령으로
+              실행하며, 다른 컴퓨터에서는 로컬 설치 후 DDD_URL을 지정합니다.
             </p>
             <p className="dialog-note">
               AI가 읽은 내용은 연결한 모델에 전달될 수 있어요. 프로젝트 책임자가

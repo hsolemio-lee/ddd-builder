@@ -181,3 +181,58 @@ test('site-admin demotion clears the open admin dialog on stream reconnect', asy
     page.getByText('sensitive-admin@example.test', { exact: false }),
   ).toHaveCount(0);
 });
+
+test('personal MCP setup offers HTTP and preserves stdio configuration', async ({
+  page,
+}) => {
+  await page.route('**/api/auth/config', (route) =>
+    route.fulfill({ json: { mode: 'oidc' } }),
+  );
+  await page.route('**/api/session', (route) =>
+    route.fulfill({ json: { user } }),
+  );
+  await page.route('**/api/state', (route) =>
+    route.fulfill({ json: { projects: [project], cards: [] } }),
+  );
+  await page.route('**/api/events', (route) =>
+    route.fulfill({
+      contentType: 'text/event-stream',
+      body: `event: state\ndata: ${JSON.stringify({ projects: [project], cards: [] })}\n\n`,
+    }),
+  );
+  await page.route('**/api/info', (route) =>
+    route.fulfill({
+      json: {
+        urls: ['https://ddd.example'],
+        mcpHttp: { url: 'https://ddd.example/mcp' },
+        mcp: {
+          command: 'node',
+          args: ['/app/mcp/index.mjs'],
+          env: { DDD_URL: 'http://127.0.0.1:3210' },
+        },
+      },
+    }),
+  );
+  await page.route('**/api/tokens', (route) =>
+    route.fulfill({
+      json:
+        route.request().method() === 'POST'
+          ? {
+              token: 'test-personal-token',
+              credential: { id: 'token-id', scope: 'read' },
+            }
+          : { tokens: [] },
+    }),
+  );
+  await page.goto('/');
+  await page.getByRole('button', { name: 'AI와 함께 설계하기' }).click();
+  await expect(page.getByLabel('연결 방식')).toHaveValue('http');
+  await page.getByRole('button', { name: '새 MCP 토큰 만들기' }).click();
+  const config = page.locator('.config-block');
+  await expect(config).toContainText('https://ddd.example/mcp');
+  await expect(config).toContainText('Bearer test-personal-token');
+  await page.getByLabel('연결 방식').selectOption('stdio');
+  await expect(config).toContainText('/app/mcp/index.mjs');
+  await expect(config).toContainText('DDD_READ_ONLY');
+  await expect(config).not.toContainText('Authorization');
+});
