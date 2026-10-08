@@ -6,6 +6,7 @@ RUN npm ci
 COPY index.html tsconfig.json vite.config.ts ./
 COPY public ./public
 COPY src ./src
+COPY shared ./shared
 RUN npm run build \
     && npm prune --omit=dev \
     && mkdir -p /app/data && chown 1000:1000 /app/data
@@ -22,6 +23,7 @@ COPY package.json package-lock.json ./
 COPY LICENSE ./LICENSE
 COPY server ./server
 COPY mcp ./mcp
+COPY shared ./shared
 # Preserve ownership of existing workshop volumes (the prior node user is UID1000).
 USER 1000:1000
 EXPOSE 3210

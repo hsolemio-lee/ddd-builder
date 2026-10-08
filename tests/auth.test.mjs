@@ -819,9 +819,9 @@ test('HTTP MCP isolates credentials, preserves tools and resources, and enforces
   const writer = await connect(write.token);
   assert.deepEqual(
     (await reader.listTools()).tools.map((x) => x.name),
-    ['list_projects', 'get_project_board'],
+    ['list_projects', 'get_project_board', 'review_design'],
   );
-  assert.equal((await writer.listTools()).tools.length, 4);
+  assert.equal((await writer.listTools()).tools.length, 5);
   const [a, b] = await Promise.all([
     reader.callTool({ name: 'list_projects' }),
     writer.callTool({ name: 'list_projects' }),
@@ -885,7 +885,7 @@ test('HTTP MCP isolates credentials, preserves tools and resources, and enforces
   );
   await s.request(`/tokens/${read.credential.id}`, owner.cookie, 'DELETE');
   await assert.rejects(reader.listTools());
-  assert.equal((await writer.listTools()).tools.length, 4);
+  assert.equal((await writer.listTools()).tools.length, 5);
 });
 
 test('HTTP MCP rejects cookies, invalid origins, unsupported methods and oversized bodies', async (t) => {

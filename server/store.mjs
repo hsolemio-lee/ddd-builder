@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { normalizeCard } from '../shared/design.mjs';
 
 export function openStore(dataDir) {
   mkdirSync(dataDir, { recursive: true });
@@ -24,10 +25,13 @@ export function openStore(dataDir) {
     db,
     state: () => ({
       projects: allProjects.all().map(parse),
-      cards: allCards.all().map(parse),
+      cards: allCards.all().map((row) => normalizeCard(parse(row))),
     }),
     project: (id) => parse(getProject.get(id)),
-    card: (id) => parse(getCard.get(id)),
+    card: (id) => {
+      const card = parse(getCard.get(id));
+      return card && normalizeCard(card);
+    },
     saveProject: (p) => projectWrite.run(p.id, JSON.stringify(p)),
     saveCard: (c) => cardWrite.run(c.id, c.projectId, JSON.stringify(c)),
     deleteProject: (id) =>
@@ -90,6 +94,10 @@ export function seedSample(
     counts[stage] = index + 1;
     const card = record(
       {
+        status: 'proposed',
+        decision: '',
+        scenario: 'shared',
+        links: [],
         projectId: project.id,
         stage,
         kind,

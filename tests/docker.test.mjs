@@ -106,7 +106,7 @@ test(
     const readClient = await connect(true);
     assert.deepEqual(
       (await readClient.listTools()).tools.map((tool) => tool.name).sort(),
-      ['get_project_board', 'list_projects'],
+      ['get_project_board', 'list_projects', 'review_design'],
     );
     const list = await readClient.callTool({
       name: 'list_projects',

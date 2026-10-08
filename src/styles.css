@@ -2551,3 +2551,375 @@ a svg {
 .generated-token {
   margin: 20px 0;
 }
+
+/* Design review metadata and directed flow views. */
+.design-toolbar {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 20px;
+  padding: 14px;
+  background: #f3f6f1;
+  border: 1px solid #dce5db;
+  border-radius: 10px;
+}
+.design-toolbar label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11px;
+  color: #455d4b;
+}
+.design-toolbar select,
+.review-scope select {
+  min-height: 36px;
+  border: 1px solid #c9d6cb;
+  border-radius: 6px;
+  padding: 5px 28px 5px 9px;
+  background: white;
+  color: #304638;
+  font: inherit;
+}
+.visible-count {
+  font-size: 12px;
+  color: #536a59;
+  margin-left: auto;
+  align-self: center;
+}
+.view-toggle {
+  display: flex;
+  border: 1px solid #bacabd;
+  border-radius: 7px;
+  overflow: hidden;
+}
+.view-toggle button {
+  min-height: 36px;
+  padding: 7px 12px;
+  background: white;
+  border: 0;
+  color: #435e4b;
+  font-size: 12px;
+}
+.view-toggle button.active {
+  background: #385943;
+  color: white;
+}
+.card-review-tags {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 8px 12px 0;
+}
+.agreement-badge,
+.scenario-badge,
+.link-count {
+  font-size: 10px;
+  line-height: 1.5;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: #435448;
+  background: #ffffffa6;
+  border: 1px solid #52695325;
+}
+.status-hypothesis {
+  color: #754f1d;
+  background: #fff6dc;
+}
+.status-agreed {
+  color: #205a3d;
+  background: #e7f5e9;
+}
+.status-proposed {
+  color: #325376;
+  background: #eff5fc;
+}
+.review-fields,
+.link-inputs {
+  display: flex;
+  gap: 12px;
+  align-items: end;
+  flex-wrap: wrap;
+}
+.review-fields label,
+.link-inputs label {
+  flex: 1;
+  min-width: 140px;
+}
+.field-help {
+  font-size: 12px;
+  line-height: 1.7;
+  color: #526959;
+}
+.link-editor {
+  border-top: 1px solid #dce5dd;
+  padding-top: 14px;
+}
+.link-editor ul {
+  padding: 0;
+  list-style: none;
+}
+.link-editor li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: #f4f7f2;
+  padding: 6px 8px;
+  margin: 5px 0;
+  border-radius: 5px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.link-inputs select {
+  width: 100%;
+}
+.design-review {
+  border: 1px solid #cbd9cd;
+  border-radius: 10px;
+  padding: 18px;
+  margin-bottom: 20px;
+  background: #f9fbf7;
+}
+.review-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.review-summary strong {
+  font-size: 15px;
+  margin-right: auto;
+}
+.design-review > p {
+  font-size: 13px;
+  line-height: 1.7;
+}
+.review-scope {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  margin: 12px 0;
+}
+.review-issues {
+  list-style: none;
+  padding: 0;
+  max-height: 360px;
+  overflow: auto;
+}
+.review-issues button {
+  width: 100%;
+  background: white;
+  border: 1px solid #dbe4da;
+  text-align: left;
+  padding: 12px;
+  margin-top: 6px;
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.review-issues span {
+  font-size: 11px;
+  color: #5d7362;
+}
+.review-issues strong {
+  font-size: 12px;
+  font-weight: 500;
+  color: #304b39;
+}
+.flow-board {
+  border: 1px solid #d8e2d7;
+  border-radius: 10px;
+  padding: 16px;
+  background: #fcfdf9;
+  min-width: 0;
+}
+.flow-scroll {
+  width: 100%;
+  overflow: auto;
+  max-height: 650px;
+  border: 1px solid #e0e7df;
+  border-radius: 8px;
+  background: #f6f8f3;
+}
+.flow-canvas {
+  position: relative;
+}
+.flow-canvas svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+.flow-node {
+  position: absolute;
+  width: 224px;
+  min-height: 112px;
+  border: 1px solid #becfbe;
+  border-radius: 7px;
+  padding: 12px;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-shadow: 0 2px 4px #304b3910;
+}
+.flow-node.card-orange {
+  background: #ffe4c9;
+  border-color: #f3d2b1;
+}
+.flow-node span,
+.flow-node small {
+  font-size: 10px;
+  color: #4f6254;
+}
+.flow-node strong {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #263e2e;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.flow-empty {
+  padding: 28px 10px;
+  text-align: center;
+}
+.flow-empty p {
+  font-size: 13px;
+  color: #57705e;
+  line-height: 1.7;
+}
+.flow-connections {
+  margin-top: 14px;
+  font-size: 12px;
+}
+.flow-connections ul {
+  padding-left: 18px;
+}
+.flow-connections li {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.unconnected-cards {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 12px;
+}
+.card-details p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+button:focus-visible,
+select:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+.flow-scroll:focus-visible,
+summary:focus-visible {
+  outline: 3px solid #5b8968;
+  outline-offset: 3px;
+}
+@media (max-width: 600px) {
+  .design-toolbar {
+    gap: 10px;
+  }
+  .design-toolbar label {
+    flex: 1;
+    min-width: 120px;
+  }
+  .visible-count {
+    width: 100%;
+    margin: 0;
+  }
+  .link-inputs {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .flow-board {
+    padding: 12px;
+  }
+  .review-summary {
+    gap: 8px;
+  }
+}
+.context-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.context-relation-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.context-relation-editor label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.context-diagram {
+  border: 1px solid #d6e0d5;
+  background: #fff;
+  border-radius: 8px;
+  padding: 12px;
+  overflow: hidden;
+  min-width: 0;
+}
+.mermaid-svg {
+  overflow: auto;
+  max-height: 520px;
+}
+.mermaid-svg svg {
+  display: block;
+  min-width: 220px;
+  max-width: none !important;
+  height: auto;
+}
+.context-diagram.compact .mermaid-svg {
+  max-height: 220px;
+}
+.context-diagram.compact .mermaid-svg svg {
+  width: 100%;
+  max-width: 100% !important;
+  min-width: 0;
+}
+.context-diagram details {
+  font-size: 12px;
+  margin-top: 10px;
+}
+.diagram-source,
+.diagram-error pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  max-height: 180px;
+  overflow: auto;
+}
+.diagram-error {
+  color: #874c31;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.card-diagram {
+  padding: 0 12px 12px;
+}
+.editor-inputs {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 17px;
+}
+.editor-inputs:disabled {
+  opacity: 0.7;
+}

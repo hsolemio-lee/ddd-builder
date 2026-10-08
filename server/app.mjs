@@ -1,5 +1,12 @@
 import { createServer } from 'node:http';
 import { handleMcpHttp } from '../mcp/http.mjs';
+import {
+  statuses,
+  scenarios,
+  linkKinds,
+  flowAllowed,
+  reviewBoard,
+} from '../shared/design.mjs';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { resolve, sep, extname } from 'node:path';
@@ -75,6 +82,10 @@ function cardFields(body, projectId, store, current) {
           'contextId',
           'data',
           'position',
+          'status',
+          'decision',
+          'scenario',
+          'links',
           'revision',
         ]
       : [
@@ -85,6 +96,10 @@ function cardFields(body, projectId, store, current) {
           'contextId',
           'data',
           'position',
+          'status',
+          'decision',
+          'scenario',
+          'links',
         ],
   );
   const value = {
@@ -95,6 +110,10 @@ function cardFields(body, projectId, store, current) {
     contextId: current?.contextId ?? null,
     data: current?.data ?? {},
     position: current?.position ?? 0,
+    status: current?.status ?? 'proposed',
+    decision: current?.decision ?? '',
+    scenario: current?.scenario ?? 'shared',
+    links: current?.links ?? [],
     ...body,
   };
   if (!kinds[value.stage]?.includes(value.kind))
@@ -116,7 +135,11 @@ function cardFields(body, projectId, store, current) {
     fail(400, '카드 위치가 올바르지 않습니다.');
   const defaults =
     value.kind === 'context'
-      ? { relationships: '' }
+      ? {
+          relationships: '',
+          relationshipDiagram: '',
+          relationshipFormat: 'text',
+        }
       : value.kind === 'aggregate'
         ? { root: '', entities: '', valueObjects: '', invariants: '' }
         : value.kind === 'task'
@@ -130,6 +153,70 @@ function cardFields(body, projectId, store, current) {
         fail(400, '완료 여부는 참 또는 거짓이어야 합니다.');
     } else text(field, key, limits.detail);
   }
+  if (
+    value.kind === 'context' &&
+    !['text', 'mermaid'].includes(value.data.relationshipFormat)
+  )
+    fail(400, '컨텍스트 관계 형식은 text 또는 mermaid여야 합니다.');
+  if (
+    !Object.hasOwn(statuses, value.status) ||
+    !Object.hasOwn(scenarios, value.scenario)
+  )
+    fail(400, '합의 상태 또는 흐름 구분이 올바르지 않습니다.');
+  value.decision = text(value.decision, '검토 근거', limits.detail);
+  if (!Array.isArray(value.links) || value.links.length > 100)
+    fail(400, '연결은 최대 100개까지 지정할 수 있습니다.');
+  const seen = new Set();
+  for (const link of value.links) {
+    allowed(link, ['targetId', 'kind']);
+    if (
+      typeof link.targetId !== 'string' ||
+      !Object.hasOwn(linkKinds, link.kind)
+    )
+      fail(400, '연결 형식이 올바르지 않습니다.');
+    const target = store.card(link.targetId);
+    if (!target || target.projectId !== projectId || target.id === current?.id)
+      fail(400, '같은 프로젝트의 다른 카드에 연결해 주세요.');
+    const key = link.kind + ':' + link.targetId;
+    if (seen.has(key)) fail(400, '같은 연결을 중복 지정할 수 없습니다.');
+    seen.add(key);
+    if (link.kind === 'flow' && !flowAllowed(value, target))
+      fail(
+        400,
+        '흐름은 행위자 → 명령 → 이벤트 → 정책 → 명령 또는 이벤트 → 이벤트로 연결해 주세요.',
+      );
+  }
+  if (current && current.kind !== value.kind) {
+    for (const source of store
+      .state()
+      .cards.filter((c) => c.projectId === projectId))
+      if (
+        source.links.some(
+          (l) => l.kind === 'flow' && l.targetId === current.id,
+        ) &&
+        !flowAllowed(source, value)
+      )
+        fail(
+          400,
+          '카드 유형을 바꾸기 전에 들어오는 흐름 연결을 수정해 주세요.',
+        );
+  }
+  if (
+    current?.status === 'agreed' &&
+    body.status === undefined &&
+    [
+      'kind',
+      'title',
+      'description',
+      'contextId',
+      'data',
+      'scenario',
+      'links',
+    ].some((key) => JSON.stringify(value[key]) !== JSON.stringify(current[key]))
+  )
+    value.status = 'proposed';
+  if (value.status === 'agreed' && !value.decision.trim())
+    fail(400, '합의할 때 검토자와 합의 근거를 기록해 주세요.');
   delete value.revision;
   return value;
 }
@@ -208,13 +295,40 @@ function markdown(project, cards) {
         '',
         escape(card.description),
       );
+      sections.push(
+        '',
+        `검토 상태: ${statuses[card.status]}`,
+        `흐름 구분: ${scenarios[card.scenario]}`,
+      );
+      if (card.decision)
+        sections.push('', `검토 근거: ${escape(card.decision)}`);
+      for (const link of card.links)
+        sections.push(
+          '',
+          `${linkKinds[link.kind]} → ${escape(cards.find((c) => c.id === link.targetId)?.title ?? link.targetId)} (${escape(link.targetId)})`,
+        );
       if (card.contextId)
         sections.push(
           '',
           `컨텍스트: ${escape(cards.find((c) => c.id === card.contextId)?.title ?? '')}`,
         );
-      for (const [key, value] of Object.entries(card.data))
-        sections.push('', `${key}: ${escape(value)}`);
+      for (const [key, value] of Object.entries(card.data)) {
+        if (key === 'relationshipDiagram' && value) {
+          const fence = '`'.repeat(
+            Math.max(
+              3,
+              ...[...String(value).matchAll(/`+/g)].map((m) => m[0].length + 1),
+            ),
+          );
+          sections.push(
+            '',
+            '컨텍스트 관계:',
+            fence + 'mermaid',
+            String(value),
+            fence,
+          );
+        } else sections.push('', `${key}: ${escape(value)}`);
+      }
     }
   }
   return sections.join('\n') + '\n';
@@ -731,6 +845,21 @@ export async function createApp({
       }
       let match;
       if (
+        (match = path.match(/^\/api\/projects\/([^/]+)\/review$/)) &&
+        method === 'GET'
+      ) {
+        authorize(match[1]);
+        if (!store.project(match[1])) fail(404, '프로젝트를 찾을 수 없습니다.');
+        json(
+          res,
+          200,
+          reviewBoard(
+            store.state().cards.filter((c) => c.projectId === match[1]),
+          ),
+        );
+        return;
+      }
+      if (
         (match = path.match(/^\/api\/projects\/([^/]+)\/export$/)) &&
         method === 'GET'
       ) {
@@ -890,6 +1019,26 @@ export async function createApp({
                 .state()
                 .cards.filter((c) => c.contextId === current.id))
                 store.saveCard(changed(card, { contextId: null }, user));
+            for (const linked of store
+              .state()
+              .cards.filter(
+                (c) =>
+                  c.projectId === current.projectId &&
+                  c.links.some((l) => l.targetId === current.id),
+              ))
+              store.saveCard(
+                changed(
+                  linked,
+                  {
+                    links: linked.links.filter(
+                      (l) => l.targetId !== current.id,
+                    ),
+                    status:
+                      linked.status === 'agreed' ? 'proposed' : linked.status,
+                  },
+                  user,
+                ),
+              );
             store.deleteCard(current.id);
             auditChange('card.delete', current.projectId, current.id);
           });
@@ -904,6 +1053,10 @@ export async function createApp({
           'contextId',
           'data',
           'position',
+          'status',
+          'decision',
+          'scenario',
+          'links',
           'revision',
         ]);
         revision(value, current);

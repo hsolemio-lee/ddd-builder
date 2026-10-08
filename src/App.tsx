@@ -31,7 +31,13 @@ import Modal from './components/Modal';
 import CardDetails from './components/CardDetails';
 import AccessDialog from './components/AccessDialog';
 import SecurityDialog from './components/SecurityDialog';
+import FlowBoard from './components/FlowBoard';
+import DesignReview from './components/DesignReview';
+import { normalizeCard, statuses, scenarios } from '../shared/design.mjs';
 
+function normalizeWorkspace(value: Workspace): Workspace {
+  return { ...value, cards: value.cards.map(normalizeCard) };
+}
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -59,6 +65,11 @@ export default function App() {
   const [sidebar, setSidebar] = useState(false);
   const [filter, setFilter] = useState('all');
   const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [contextFilter, setContextFilter] = useState('all');
+  const [scenarioFilter, setScenarioFilter] = useState('all');
+  const [view, setView] = useState<'cards' | 'flow'>('cards');
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [notice, setNotice] = useState('');
   const [receivedState, setReceivedState] = useState(false);
   const [needsJoin, setNeedsJoin] = useState(false);
@@ -85,7 +96,9 @@ export default function App() {
     source.addEventListener('state', (event) => {
       if (!active) return;
       try {
-        setWorkspace(JSON.parse((event as MessageEvent).data));
+        setWorkspace(
+          normalizeWorkspace(JSON.parse((event as MessageEvent).data)),
+        );
         setConnected(true);
         setReceivedState(true);
       } catch {
@@ -142,7 +155,7 @@ export default function App() {
           return api<Workspace>('/state');
         })
         .then((next) => {
-          if (active) setWorkspace(next);
+          if (active) setWorkspace(normalizeWorkspace(next));
         })
         .catch((error) => {
           if (active && error instanceof ApiError && error.status === 401) {
@@ -199,7 +212,39 @@ export default function App() {
   const filledSteps = steps.filter((s) =>
     projectCards.some((c) => c.stage === s.id),
   ).length;
+  const visibleCards = stageCards.filter(
+    (c) =>
+      (statusFilter === 'all' || c.status === statusFilter) &&
+      (contextFilter === 'all' ||
+        (contextFilter === 'none'
+          ? !c.contextId
+          : c.contextId === contextFilter)) &&
+      (stage !== 'events' ||
+        scenarioFilter === 'all' ||
+        c.scenario === scenarioFilter ||
+        c.scenario === 'shared'),
+  );
+  const displayedCards = visibleCards.filter(
+    (c) =>
+      (filter === 'all' || c.kind === filter) &&
+      (!query ||
+        `${c.title} ${c.description} ${c.decision} ${Object.values(c.data).join(' ')}`
+          .toLowerCase()
+          .includes(query.toLowerCase())),
+  );
+  function openCard(card: Card) {
+    if (canEdit)
+      setEditor({ card, stage: card.stage, projectId: card.projectId });
+    else setDetails(card);
+  }
+  function resetDesignFilters() {
+    setStatusFilter('all');
+    setContextFilter('all');
+    setScenarioFilter('all');
+    setView('cards');
+  }
   function navigate(next: Stage) {
+    resetDesignFilters();
     setStage(next);
     setFilter('all');
     setQuery('');
@@ -332,6 +377,8 @@ export default function App() {
               value={project?.id || ''}
               onChange={(e) => {
                 setProjectId(e.target.value);
+                resetDesignFilters();
+                setReviewOpen(false);
                 setQuery('');
                 setFilter('all');
               }}
@@ -610,35 +657,159 @@ export default function App() {
                   </button>
                 </div>
               </div>
-              <Board
-                stage={stage}
-                cards={stageCards}
-                allCards={projectCards}
-                query={query}
-                filter={filter}
-                connected={connected}
-                pending={pending}
-                readOnly={!canEdit}
-                onEdit={(card) =>
-                  canEdit
-                    ? setEditor({
-                        card,
-                        stage: card.stage,
-                        projectId: card.projectId,
-                      })
-                    : setDetails(card)
-                }
-                onAdd={(kind) =>
-                  setEditor({ stage, kind, projectId: project.id })
-                }
-                onPatch={patch}
-                onMove={move}
-              />
+              <div className="design-toolbar">
+                {(stage === 'events' || stage === 'contexts') && (
+                  <div
+                    className="view-toggle"
+                    role="group"
+                    aria-label="보드 보기"
+                  >
+                    <button
+                      className={view === 'cards' ? 'active' : ''}
+                      aria-pressed={view === 'cards'}
+                      onClick={() => setView('cards')}
+                    >
+                      카드 보기
+                    </button>
+                    <button
+                      className={view === 'flow' ? 'active' : ''}
+                      aria-pressed={view === 'flow'}
+                      onClick={() => setView('flow')}
+                    >
+                      흐름 보기
+                    </button>
+                  </div>
+                )}
+                <label>
+                  검토 상태 필터
+                  <select
+                    aria-label="검토 상태 필터"
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value)}
+                  >
+                    <option value="all">모든 검토 상태</option>
+                    {Object.entries(statuses).map(([k, v]) => (
+                      <option value={k} key={k}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {stage !== 'discovery' && stage !== 'contexts' && (
+                  <label>
+                    컨텍스트 필터
+                    <select
+                      aria-label="컨텍스트 필터"
+                      value={contextFilter}
+                      onChange={(e) => setContextFilter(e.target.value)}
+                    >
+                      <option value="all">모든 컨텍스트</option>
+                      <option value="none">미분류</option>
+                      {projectCards
+                        .filter((c) => c.kind === 'context')
+                        .map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.title}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                )}
+                {stage === 'events' && (
+                  <label>
+                    흐름 필터
+                    <select
+                      aria-label="흐름 필터"
+                      value={scenarioFilter}
+                      onChange={(e) => setScenarioFilter(e.target.value)}
+                    >
+                      <option value="all">모든 흐름</option>
+                      {Object.entries(scenarios).map(([k, v]) => (
+                        <option value={k} key={k}>
+                          {v}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                <button
+                  className="button"
+                  aria-expanded={reviewOpen}
+                  onClick={() => setReviewOpen(!reviewOpen)}
+                >
+                  설계 점검
+                </button>
+                <span className="visible-count">
+                  {displayedCards.length}/{stageCards.length}개 표시
+                </span>
+              </div>
+              {displayedCards.length === 0 &&
+                (query ||
+                  filter !== 'all' ||
+                  statusFilter !== 'all' ||
+                  contextFilter !== 'all' ||
+                  scenarioFilter !== 'all') && (
+                  <div className="empty-search" role="status">
+                    조건에 맞는 카드가 없어요.{' '}
+                    <button
+                      className="text-button"
+                      onClick={() => {
+                        setQuery('');
+                        setFilter('all');
+                        setStatusFilter('all');
+                        setContextFilter('all');
+                        setScenarioFilter('all');
+                      }}
+                    >
+                      필터 초기화
+                    </button>
+                  </div>
+                )}
+              {reviewOpen && (
+                <DesignReview
+                  cards={projectCards}
+                  stage={stage}
+                  onOpen={openCard}
+                />
+              )}
+              {view === 'flow' &&
+              (stage === 'events' || stage === 'contexts') ? (
+                <FlowBoard
+                  cards={displayedCards}
+                  allCards={projectCards}
+                  onOpen={openCard}
+                />
+              ) : (
+                <Board
+                  stage={stage}
+                  cards={displayedCards}
+                  allCards={projectCards}
+                  query=""
+                  filter={filter}
+                  connected={connected}
+                  pending={pending}
+                  readOnly={!canEdit}
+                  allowMove={
+                    !query &&
+                    statusFilter === 'all' &&
+                    contextFilter === 'all' &&
+                    scenarioFilter === 'all'
+                  }
+                  onEdit={openCard}
+                  onAdd={(kind) =>
+                    setEditor({ stage, kind, projectId: project.id })
+                  }
+                  onPatch={patch}
+                  onMove={move}
+                />
+              )}
               <div className="step-footer">
                 <div className="step-progress">
                   <span>{filledSteps}/5</span>
                   <div>
-                    <strong>이야기가 설계로 이어지고 있어요</strong>
+                    <strong>
+                      작성 범위 · 합의 진행은 설계 점검에서 확인해요
+                    </strong>
                     <p>
                       {filledSteps}개 단계에 카드가 있어요 · 단계는 자유롭게
                       오갈 수 있어요
@@ -721,6 +892,7 @@ export default function App() {
       )}
       {details && (
         <CardDetails
+          cards={projectCards}
           card={workspace.cards.find((c) => c.id === details.id) || details}
           onClose={() => setDetails(undefined)}
         />

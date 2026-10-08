@@ -27,6 +27,8 @@ const kind = z.enum([
 const data = z
   .object({
     relationships: z.string().max(20000).optional(),
+    relationshipDiagram: z.string().max(20000).optional(),
+    relationshipFormat: z.enum(['text', 'mermaid']).optional(),
     root: z.string().max(20000).optional(),
     entities: z.string().max(20000).optional(),
     valueObjects: z.string().max(20000).optional(),
@@ -36,6 +38,22 @@ const data = z
   })
   .strict();
 const id = z.string().min(1).max(100);
+const designFields = {
+  status: z.enum(['hypothesis', 'proposed', 'agreed']).optional(),
+  decision: z.string().max(20000).optional(),
+  scenario: z.enum(['shared', 'main', 'exception']).optional(),
+  links: z
+    .array(
+      z
+        .object({
+          targetId: id,
+          kind: z.enum(['flow', 'related', 'dependsOn']),
+        })
+        .strict(),
+    )
+    .max(100)
+    .optional(),
+};
 const readAnnotations = {
   readOnlyHint: true,
   openWorldHint: false,
@@ -122,15 +140,29 @@ export function createMcpServer({
     },
     safe(({ projectId, stage }) => projectBoard(projectId, stage)),
   );
+  server.registerTool(
+    'review_design',
+    {
+      title: '설계 점검',
+      description:
+        'Read review prompts for missing flow links, aggregate rules and ownership. These are not proof of domain correctness or a completion score.',
+      inputSchema: { projectId: id },
+      annotations: readAnnotations,
+    },
+    safe(({ projectId }) =>
+      board.request(`/projects/${encodeURIComponent(projectId)}/review`),
+    ),
+  );
   if (!readOnly) {
     server.registerTool(
       'create_card',
       {
         title: '설계 카드 추가',
         description:
-          'Add a card to the shared board when the user requests edits. Stage-kind pairs: discovery=problem/actor/term, events=event/command/actor/policy/question, contexts=context, aggregates=aggregate, tasks=task. data fields: contexts relationships; aggregates root/entities/valueObjects/invariants; tasks assignee/done. Higher position sorts later. Existing teammates see this immediately.',
+          'Add a card to the shared board when the user requests edits. Stage-kind pairs: discovery=problem/actor/term, events=event/command/actor/policy/question, contexts=context, aggregates=aggregate, tasks=task. data fields: contexts relationships (text), relationshipDiagram (Mermaid body without code fences/config directives), relationshipFormat=text/mermaid; aggregates root/entities/valueObjects/invariants; tasks assignee/done. Higher position sorts later. status=hypothesis/proposed/agreed (agreed requires decision: reviewer and rationale); scenario=shared/main/exception. links are outgoing directed {targetId,kind:flow/related/dependsOn} references in the same project. Flow grammar: actor->command->event->policy->command or event->event. related traces any cards, including contexts/aggregates. Existing teammates see this immediately.',
         inputSchema: {
           projectId: id,
+          ...designFields,
           stage,
           kind,
           title: z.string().min(1).max(200),
@@ -161,9 +193,10 @@ export function createMcpServer({
       {
         title: '설계 카드 수정',
         description:
-          'Update an existing card after reading its latest revision. Only supplied fields change; data replaces the data object so include every field to preserve. contextId must reference a context in the same project. Stage cannot change. On 409, inspect current, reread the board and reconsider edits; never blindly retry or overwrite human work.',
+          'Update an existing card after reading its latest revision. links replace the outgoing links array; read and preserve other links. Implicit edits of agreed content return it to proposed; explicit re-agreement requires decision. Only supplied fields change; data replaces the data object so include every field to preserve. contextId must reference a context in the same project. Stage cannot change. On 409, inspect current, reread the board and reconsider edits; never blindly retry or overwrite human work.',
         inputSchema: {
           cardId: id,
+          ...designFields,
           revision: z.number().int().min(1),
           kind: kind.optional(),
           title: z.string().min(1).max(200).optional(),

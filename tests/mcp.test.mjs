@@ -37,7 +37,11 @@ function value(result) {
 test('MCP lists projects and exposes one project as tools, resources and an analysis prompt', async (t) => {
   const { client } = await setup(t);
   const names = (await client.listTools()).tools.map((tool) => tool.name);
-  assert.deepEqual(names.sort(), ['get_project_board', 'list_projects']);
+  assert.deepEqual(names.sort(), [
+    'get_project_board',
+    'list_projects',
+    'review_design',
+  ]);
   const projects = value(
     await client.callTool({ name: 'list_projects', arguments: {} }),
   );
@@ -147,4 +151,67 @@ test('real stdio MCP initializes and reads the HTTP board without stdout noise',
     await client.callTool({ name: 'list_projects', arguments: {} }),
   );
   assert.equal(projects[0].name, '온라인 주문 서비스');
+});
+
+test('MCP exposes review and structured design metadata with Mermaid context relations', async (t) => {
+  const { client } = await setup(t, { readOnly: false });
+  const projectId = value(
+    await client.callTool({ name: 'list_projects', arguments: {} }),
+  )[0].id;
+  const context = value(
+    await client.callTool({
+      name: 'create_card',
+      arguments: {
+        projectId,
+        stage: 'contexts',
+        kind: 'context',
+        title: 'MCP 컨텍스트',
+        status: 'hypothesis',
+        data: {
+          relationships: '주문과 결제',
+          relationshipDiagram: 'flowchart LR\n A --> B',
+          relationshipFormat: 'mermaid',
+        },
+      },
+    }),
+  );
+  assert.equal(context.data.relationshipFormat, 'mermaid');
+  assert.equal(context.status, 'hypothesis');
+  const event = value(
+    await client.callTool({
+      name: 'create_card',
+      arguments: {
+        projectId,
+        stage: 'events',
+        kind: 'event',
+        title: 'MCP 사건',
+        scenario: 'exception',
+        contextId: context.id,
+      },
+    }),
+  );
+  const cmd = value(
+    await client.callTool({
+      name: 'create_card',
+      arguments: {
+        projectId,
+        stage: 'events',
+        kind: 'command',
+        title: 'MCP 명령',
+        links: [{ kind: 'flow', targetId: event.id }],
+        status: 'agreed',
+        decision: '담당자와 명령 결과 합의',
+        contextId: context.id,
+      },
+    }),
+  );
+  assert.equal(cmd.links[0].targetId, event.id);
+  const review = value(
+    await client.callTool({ name: 'review_design', arguments: { projectId } }),
+  );
+  assert.ok(
+    !review.issues.some(
+      (i) => i.cardId === cmd.id && i.code === 'command-result',
+    ),
+  );
 });

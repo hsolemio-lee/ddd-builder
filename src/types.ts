@@ -28,7 +28,17 @@ export interface Project {
   updatedAt: string;
   updatedBy: string;
 }
+export type AgreementStatus = 'hypothesis' | 'proposed' | 'agreed';
+export type Scenario = 'shared' | 'main' | 'exception';
+export interface CardLink {
+  targetId: string;
+  kind: 'flow' | 'related' | 'dependsOn';
+}
 export interface Card {
+  status: AgreementStatus;
+  decision: string;
+  scenario: Scenario;
+  links: CardLink[];
   id: string;
   projectId: string;
   stage: Stage;
@@ -45,7 +55,17 @@ export interface Card {
 }
 export type CardDraft = Pick<
   Card,
-  'stage' | 'kind' | 'title' | 'description' | 'contextId' | 'data' | 'position'
+  | 'stage'
+  | 'kind'
+  | 'title'
+  | 'description'
+  | 'contextId'
+  | 'data'
+  | 'position'
+  | 'status'
+  | 'decision'
+  | 'scenario'
+  | 'links'
 >;
 export interface Workspace {
   projects: Project[];

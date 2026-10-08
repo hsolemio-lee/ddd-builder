@@ -11,7 +11,7 @@
     "dev": "node scripts/dev.mjs",
     "build": "tsc -b && vite build",
     "start": "node server/index.mjs",
-    "test": "node --test tests/server.test.mjs tests/mcp.test.mjs tests/security.test.mjs tests/auth.test.mjs",
+    "test": "node --test tests/design.test.mjs tests/server.test.mjs tests/mcp.test.mjs tests/security.test.mjs tests/auth.test.mjs",
     "mcp": "node mcp/index.mjs",
     "test:e2e": "playwright test",
     "test:docker": "node --test tests/docker.test.mjs",
@@ -19,7 +19,9 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
+    "dompurify": "^3.4.16",
     "lucide-react": "^0.577.0",
+    "mermaid": "^12.1.0",
     "openid-client": "^6.8.8",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
@@ -34,5 +36,10 @@
     "prettier": "^3.9.9",
     "typescript": "^5.9.0",
     "vite": "^7.3.0"
+  },
+  "overrides": {
+    "mermaid": {
+      "katex": "0.18.2"
+    }
   }
 }

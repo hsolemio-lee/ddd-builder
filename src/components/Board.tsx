@@ -8,6 +8,8 @@ import {
 } from 'lucide-react';
 import type { Card, Kind, Stage } from '../types';
 import { kinds, steps } from '../workflow';
+import ContextRelationships from './ContextRelationships';
+import { statuses, scenarios } from '../../shared/design.mjs';
 
 export default function Board({
   stage,
@@ -18,6 +20,7 @@ export default function Board({
   connected,
   pending,
   readOnly = false,
+  allowMove = true,
   onEdit,
   onAdd,
   onPatch,
@@ -31,6 +34,7 @@ export default function Board({
   connected: boolean;
   pending: Set<string>;
   readOnly?: boolean;
+  allowMove?: boolean;
   onEdit: (card: Card) => void;
   onAdd: (kind?: Kind) => void;
   onPatch: (card: Card, patch: Partial<Card>) => void;
@@ -80,6 +84,17 @@ export default function Board({
             </span>
           )}
         </div>
+        <div className="card-review-tags">
+          <span className={`agreement-badge status-${card.status}`}>
+            {statuses[card.status]}
+          </span>
+          {stage === 'events' && card.scenario !== 'shared' && (
+            <span className="scenario-badge">{scenarios[card.scenario]}</span>
+          )}
+          {card.links.length > 0 && (
+            <span className="link-count">연결 {card.links.length}</span>
+          )}
+        </div>
         <button
           className="card-content"
           aria-label={`${readOnly ? '카드 보기' : '카드 편집'}: ${card.title}`}
@@ -93,13 +108,24 @@ export default function Board({
               {String(card.data.root)}
             </span>
           )}
-          {stage === 'contexts' && card.data.relationships && (
-            <span className="context-relation">
-              <ArrowUpRight size={14} />
-              {String(card.data.relationships)}
-            </span>
-          )}
+          {stage === 'contexts' &&
+            card.data.relationships &&
+            card.data.relationshipFormat !== 'mermaid' && (
+              <span className="context-relation">
+                <ArrowUpRight size={14} />
+                {String(card.data.relationships)}
+              </span>
+            )}
         </button>
+        {stage === 'contexts' && card.data.relationshipFormat === 'mermaid' && (
+          <div className="card-diagram">
+            <ContextRelationships
+              text={String(card.data.relationshipDiagram || '')}
+              format="mermaid"
+              compact
+            />
+          </div>
+        )}
         <div className="card-bottom">
           {stage === 'tasks' && card.data.assignee ? (
             <span className="card-context">
@@ -124,8 +150,12 @@ export default function Board({
           )}
           <div className="card-moves">
             <button
+              title={
+                !allowMove ? '순서를 바꾸려면 필터를 해제하세요.' : undefined
+              }
               aria-label={`위로 이동: ${card.title}`}
               disabled={
+                !allowMove ||
                 readOnly ||
                 !connected ||
                 pending.size > 0 ||
@@ -136,8 +166,12 @@ export default function Board({
               <ArrowUp size={13} />
             </button>
             <button
+              title={
+                !allowMove ? '순서를 바꾸려면 필터를 해제하세요.' : undefined
+              }
               aria-label={`아래로 이동: ${card.title}`}
               disabled={
+                !allowMove ||
                 readOnly ||
                 !connected ||
                 pending.size > 0 ||
