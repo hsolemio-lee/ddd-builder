@@ -106,9 +106,11 @@ test('OAuth administrator issues a default viewer invitation and revocation clea
   const guest = await guestContext.newPage();
   try {
     await guestLogin(guest, service, code);
-    await expect(
-      guest.getByLabel('프로젝트 선택').locator('option'),
-    ).toHaveCount(1);
+    const projectOptions = guest
+      .getByLabel('프로젝트 선택')
+      .locator('option:not([value=""])');
+    await expect(projectOptions).toHaveCount(1);
+    await expect(projectOptions).toHaveAttribute('value', project.id);
     await expect(guest.getByLabel('프로젝트 선택')).toHaveValue(project.id);
     await expect(
       guest.getByRole('button', { name: '카드 추가', exact: true }),
