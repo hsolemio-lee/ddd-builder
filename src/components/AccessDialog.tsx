@@ -1,3 +1,4 @@
+import GuestAccessPanel from './GuestAccessPanel';
 import { useEffect, useState, type FormEvent } from 'react';
 import type { Project, ProjectRole } from '../types';
 import { api } from '../api';
@@ -223,6 +224,7 @@ export default function AccessDialog({
                     초대 등록
                   </button>
                 </form>
+                <GuestAccessPanel projectId={project.id} />
                 <h4>멤버</h4>
                 {members.map((member) => (
                   <div className="access-row" key={member.userId}>

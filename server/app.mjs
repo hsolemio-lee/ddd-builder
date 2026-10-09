@@ -514,6 +514,7 @@ export async function createApp({
           unique.set(other.user.id, {
             id: other.user.id,
             name: other.user.name,
+            ...(other.user.guest ? { guest: true } : {}),
           });
       }
       emit(viewer, 'presence', [...unique.values()]);
@@ -700,12 +701,21 @@ export async function createApp({
       if (path === '/api/auth/config' && method === 'GET') {
         json(res, 200, {
           mode: auth.mode,
-          ...(identity ? { loginUrl: '/api/auth/login' } : {}),
+          ...(identity
+            ? {
+                loginUrl: '/api/auth/login',
+                guestLoginUrl: '/api/guest/session',
+              }
+            : {}),
         });
         return;
       }
       if (identity) {
-        if (path === '/api/auth/login' || path === '/api/auth/callback') {
+        if (
+          path === '/api/auth/login' ||
+          path === '/api/auth/callback' ||
+          (path === '/api/guest/session' && method === 'POST')
+        ) {
           const retry = loginLimiter.consume(peer);
           if (retry) rejectRateLimit(retry);
         }
@@ -781,7 +791,12 @@ export async function createApp({
         }
       }
       if (!signed) fail(401, '먼저 접속해 주세요.');
-      const user = signed.user;
+      const user = signed.user.guest
+        ? {
+            ...signed.user,
+            name: `${signed.user.name} (게스트 · ${signed.user.id.slice(0, 8)})`,
+          }
+        : signed.user;
       const authorize = (projectId, minimum = 'viewer', human = false) => {
         if (!identity) return;
         if (human) identity.human(signed);
@@ -801,7 +816,7 @@ export async function createApp({
         return;
       }
       if (path === '/api/info' && method === 'GET') {
-        identity?.human(signed);
+        identity?.member(signed);
         json(res, 200, {
           urls: shareUrls(
             host,
@@ -900,7 +915,7 @@ export async function createApp({
           );
         if (value.sample !== undefined && typeof value.sample !== 'boolean')
           fail(400, '예제 여부가 올바르지 않습니다.');
-        identity?.human(signed);
+        identity?.member(signed);
         if (identity) identity.refresh(signed);
         const project = store.transaction(() => {
           const created = value.sample

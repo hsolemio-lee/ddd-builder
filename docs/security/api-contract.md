@@ -2,10 +2,10 @@
 
 인증 구현과 UI가 함께 사용하는 계약이다. 이 문서 자체는 구현 완료를 뜻하지 않는다. 모든 관리 API는 서버에서 권한을 확인하며 MCP Bearer 토큰으로 관리 기능을 호출할 수 없다.
 
-- `GET /api/auth/config`: `{ mode: 'legacy' | 'oidc', loginUrl?: '/api/auth/login' }`
+- `GET /api/auth/config`: `{ mode: 'legacy' | 'oidc', loginUrl?: '/api/auth/login', guestLoginUrl?: '/api/guest/session' }` (게스트 경로는 OIDC 모드에서만 제공)
 - `GET /api/auth/login`: 일회용 state·nonce·PKCE와 브라우저 쿠키를 만들고 IdP로 이동
 - `GET /api/auth/callback`: ID 토큰 검증, 초대/최초 관리자 확인, 새 세션 발급 후 `/`로 이동. 실패는 비밀값 없는 로그인 오류 표시
-- `GET /api/session`: `{ user: { id, name, email?, siteAdmin? } }`
+- `GET /api/session`: `{ user: { id, name, email?, siteAdmin?, guest?: true } }`
 - `GET /api/state`: 사용자에게 허용된 프로젝트와 카드만. 각 프로젝트의 `role?: 'admin' | 'editor' | 'viewer'`는 응답에서만 추가
 - `GET /api/projects/:id/access`: 관리자에게 `{ members: [{ userId, name, email, role }], invitations: [{ id, email, role, expiresAt }] }`
 - `POST /api/projects/:id/invitations`: `{ email, role }` → 초대 메타데이터. 7일 만료. 검증된 이메일 소유자만 수락
@@ -15,13 +15,32 @@
 - `GET /api/tokens`: `{ tokens: [{ id, name, projectId, scope, expiresAt, createdAt }] }` (자신의 토큰만)
 - `POST /api/tokens`: `{ projectId, name, scope: 'read' | 'write', days: 1..30 }` → `{ token, credential: { id, name, projectId, scope, expiresAt, createdAt } }`. 원문 token은 이 응답 1회만 표시
 - `DELETE /api/tokens/:id`: 자신의 토큰 철회
-- `GET /api/admin/users`: `{ users: [{ id, name, email, siteAdmin, disabled }] }` (운영 관리자)
+- `GET /api/admin/users`: `{ users: [{ id, name, email, siteAdmin, disabled, guest?: true }] }` (운영 관리자)
 - `PATCH /api/admin/users/:id`: `{ disabled?, siteAdmin? }`. 마지막 활성 운영 관리자 차단/강등 금지
 - `GET /api/admin/audit`: `{ events: [{ id, at, requestId, actorId, event, projectId?, targetId?, outcome }] }` 최대 100건, 운영 관리자만
 
 공식 모드 `/api/info`는 접속 코드나 기존 토큰을 반환하지 않는다. MCP 명령 템플릿의 환경 변수에 `DDD_TOKEN`을 쓰며 UI가 방금 생성한 원문 토큰을 넣는다. 프로젝트 조회자는 읽기 토큰만 생성할 수 있다. 쓰기 토큰도 프로젝트 관리·계정 관리·새 프로젝트 생성을 할 수 없으며 해당 프로젝트 카드 편집으로 한정한다.
 
 조회자는 카드 상세를 볼 수 있지만 저장·삭제·정렬·완료 상태 변경 기능을 사용할 수 없다. 로그아웃하면 이름과 선택 프로젝트의 브라우저 저장 값을 지우고, 철회 또는 권한 변경 시 열린 편집기와 보드 데이터도 현재 권한에 맞게 처리한다.
+
+## OIDC와 병행하는 프로젝트별 게스트
+
+아래 관리 경로는 계정으로 로그인한 해당 프로젝트 관리자만 사용할 수 있다. 게스트 정책은 프로젝트별 기본 비활성이다. 계정 멤버 목록(`/access`)과 게스트 목록을 분리하며 이메일 초대의 기존 계약을 유지한다.
+
+- `GET /api/projects/:id/guest-access`: `{ enabled, invitations, guests }`. 초대는 최근 100건, 게스트는 최근 200건. 코드 해시와 원문은 포함하지 않는다.
+- `PATCH /api/projects/:id/guest-access`: `{ enabled: boolean }`. 끄면 프로젝트의 모든 미사용 코드와 기존 게스트 세션·권한을 철회한다. 다시 켜도 복구하지 않는다.
+- `POST /api/projects/:id/guest-invitations`: `{ name?, role?: 'viewer' | 'editor', days?: 1..7 }` → `{ code, invitation: { id, name, role, createdAt, expiresAt, usedAt, revokedAt, maxUses: 1 } }`. 기본은 이름 `게스트 초대`, 조회자, 1일. 이름은 최대 80자, 활성 미사용 코드는 프로젝트당 최대 100개. 정책 비활성은 409, 개수 초과는 429. 코드 원문은 이 응답에서만 제공한다.
+- `DELETE /api/projects/:id/guest-invitations/:invitationId`: 코드 철회. 이미 사용했다면 해당 게스트도 철회한다.
+- `DELETE /api/projects/:id/guests/:userId`: 개별 게스트의 프로젝트 권한·세션·토큰을 철회한다.
+- `POST /api/guest/session`: 미로그인 사용자가 `{ name, code }`로 참여한다. 이름은 최대 60자. 성공 시 201 `{ user: { id, name, email: '', siteAdmin: false, guest: true }, projectId, expiresAt }`와 세션 쿠키를 반환한다. 만료·사용·철회·존재하지 않는 코드는 동일한 401 오류, 이미 로그인했다면 409를 반환한다.
+
+코드와 세션은 암호학적 난수이며 해시만 저장한다. 코드는 원자적으로 한 번만 소비한다. 세션 한도에 걸려 참여를 거부하면 코드를 소비하지 않는다. 게스트 로그인은 OIDC 로그인과 같은 IP 로그인 한도를 적용한다. 세션 절대 만료는 최대 12시간, 유휴 만료는 30분이다. 코드의 사용 기한이 지나도 이미 발급된 세션은 자체 만료·철회 조건을 따른다. 세션 만료나 로그아웃 후 재참여에는 새 코드가 필요하다.
+
+각 게스트에게 별도 사용자 ID를 부여하고 `guest: true`를 명시한다. 이메일과 OIDC identity는 만들지 않으며 표시 이름이 같아도 계정 멤버와 연결하지 않는다. 카드 수정 주체에는 게스트 표시와 ID 일부, 감사 로그에는 전체 사용자 ID를 남긴다. 정책·초대·가입·철회 변경은 감사 기록과 같은 트랜잭션에서 처리한다.
+
+게스트는 초대한 프로젝트의 viewer/editor 역할로 REST·문서·내보내기·SSE를 이용한다. 기존 `/members/:userId`에서 viewer/editor 변경과 철회를 지원하되 관리자 승격은 금지한다. 새 프로젝트, `/info`, 계정·멤버·운영 관리 및 `/tokens`는 계정 멤버만 허용한다. 운영 관리자도 게스트를 site admin으로 승격할 수 없다. 게스트 Bearer 토큰은 허용하지 않으며 브라우저 쿠키는 HTTP MCP에서 인증으로 받지 않는다.
+
+본문을 모두 받은 후 현재 권한을 다시 검사한다. 역할 변경·철회·정책 중단·계정 차단·프로젝트 삭제는 기존 실시간 연결에도 적용한다. 프로젝트 삭제 후에도 남은 사용자에 게스트 표식을 유지해 계정 멤버 권한을 얻지 못하도록 한다. 프런트엔드는 게스트의 인증 만료 시 보드·열린 편집기·상세·관리 화면과 브라우저 저장 값을 지운다.
 
 ## 애그리게이트 설계 계약
 

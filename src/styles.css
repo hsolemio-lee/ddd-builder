@@ -3996,3 +3996,33 @@ summary:focus-visible {
 .learning-section code {
   overflow-wrap: anywhere;
 }
+
+.guest-login-toggle {
+  width: 100%;
+  margin-top: 12px;
+}
+.guest-access-panel {
+  border-top: 1px solid var(--border);
+  margin-top: 24px;
+  padding-top: 16px;
+  min-width: 0;
+}
+.guest-access-panel h5 {
+  margin: 20px 0 10px;
+}
+.guest-code-result {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  margin: 16px 0;
+  min-width: 0;
+}
+.guest-code-result label {
+  display: grid;
+  gap: 8px;
+}
+.guest-code-result input {
+  width: 100%;
+  min-width: 0;
+  font-family: monospace;
+}

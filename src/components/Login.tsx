@@ -26,11 +26,17 @@ export default function Login({
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [authMode, setAuthMode] = useState<'legacy' | 'oidc'>();
+  const [guestAvailable, setGuestAvailable] = useState(false);
+  const [guestMode, setGuestMode] = useState(location.hash === '#guest');
+  const joiningGuest = authMode === 'oidc' && guestMode && guestAvailable;
   useEffect(() => {
     let active = true;
-    api<{ mode: 'legacy' | 'oidc' }>('/auth/config')
-      .then(({ mode }) => {
-        if (active) setAuthMode(mode);
+    api<{ mode: 'legacy' | 'oidc'; guestLoginUrl?: string }>('/auth/config')
+      .then(({ mode, guestLoginUrl }) => {
+        if (active) {
+          setAuthMode(mode);
+          setGuestAvailable(mode === 'oidc' && Boolean(guestLoginUrl));
+        }
       })
       .catch(() => {
         if (active)
@@ -51,11 +57,17 @@ export default function Login({
     setBusy(true);
     setError('');
     try {
-      const { user } = await api<{ user: User }>('/session', 'POST', {
-        name: name.trim(),
-        code: code.trim(),
-      });
+      const { user } = await api<{ user: User }>(
+        joiningGuest ? '/guest/session' : '/session',
+        'POST',
+        {
+          name: name.trim(),
+          code: code.trim(),
+        },
+      );
       localStorage.setItem('ddd-name', user.name);
+      if (joiningGuest)
+        history.replaceState(null, '', location.pathname + location.search);
       onJoin(user);
     } catch (error) {
       setError(error instanceof Error ? error.message : '접속하지 못했어요.');
@@ -63,68 +75,111 @@ export default function Login({
       setBusy(false);
     }
   }
+  const credentialsForm = (
+    <form onSubmit={join} className="login-form">
+      <label>
+        이름
+        <input
+          aria-label="이름"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="팀에서 사용할 이름"
+          autoComplete="nickname"
+          maxLength={40}
+          required
+          autoFocus
+          disabled={busy}
+        />
+      </label>
+      <label>
+        {joiningGuest ? '게스트 초대 코드' : '접속 코드'}
+        <input
+          aria-label={joiningGuest ? '게스트 초대 코드' : '접속 코드'}
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+          placeholder={
+            joiningGuest
+              ? '프로젝트 관리자에게 받은 1회용 코드'
+              : '호스트에게 받은 접속 코드'
+          }
+          type="password"
+          autoComplete="off"
+          maxLength={200}
+          required
+          disabled={busy}
+        />
+      </label>
+      {joiningGuest && (
+        <p className="dialog-note">
+          초대받은 프로젝트에만 임시로 참여합니다. 코드는 1회용이며 세션
+          만료·브라우저 변경 시 새 초대가 필요합니다.
+        </p>
+      )}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+      <button className="button primary login-submit" disabled={busy}>
+        {busy
+          ? '작업 공간에 연결하는 중…'
+          : joiningGuest
+            ? '게스트로 참여하기'
+            : '워크숍 참여하기'}
+        <ArrowRight size={18} />
+      </button>
+    </form>
+  );
   const form =
     authMode === 'oidc' ? (
       <div className="login-form">
         <p className="muted">초대받은 이메일의 계정으로 로그인해 주세요.</p>
-        {error && (
+        {!joiningGuest && error && (
           <p className="form-error" role="alert">
             {error}
           </p>
         )}
-        <a className="button primary login-submit" href="/api/auth/login">
+        <a
+          className="button primary login-submit"
+          href="/api/auth/login"
+          aria-disabled={busy}
+          onClick={(e) => {
+            if (busy) e.preventDefault();
+          }}
+        >
           계정으로 로그인 <ArrowRight size={18} />
         </a>
+        {guestAvailable && (
+          <>
+            <button
+              type="button"
+              className="button guest-login-toggle"
+              disabled={busy}
+              aria-expanded={joiningGuest}
+              onClick={() => {
+                setGuestMode((v) => !v);
+                setError('');
+              }}
+            >
+              {joiningGuest ? '게스트 입력 닫기' : '초대 코드로 게스트 참여'}
+            </button>
+            {joiningGuest && credentialsForm}
+          </>
+        )}
       </div>
     ) : !authMode ? (
       <p className="muted" role="status">
         {error || '로그인 설정을 확인하는 중…'}
       </p>
     ) : (
-      <form onSubmit={join} className="login-form">
-        <label>
-          이름
-          <input
-            aria-label="이름"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="팀에서 사용할 이름"
-            autoComplete="nickname"
-            maxLength={40}
-            required
-            autoFocus
-          />
-        </label>
-        <label>
-          접속 코드
-          <input
-            aria-label="접속 코드"
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            placeholder="호스트에게 받은 접속 코드"
-            type="password"
-            autoComplete="off"
-            maxLength={200}
-            required
-          />
-        </label>
-        {error && (
-          <p className="form-error" role="alert">
-            {error}
-          </p>
-        )}
-        <button className="button primary login-submit" disabled={busy}>
-          {busy ? '작업 공간에 연결하는 중…' : '워크숍 참여하기'}
-          <ArrowRight size={18} />
-        </button>
-      </form>
+      credentialsForm
     );
   if (compact)
     return (
       <div className="rejoin-content">
         <p className="muted">
           {authMode === 'oidc'
-            ? '로그인 시간이 만료되었어요. 개인 계정으로 다시 로그인해 주세요.'
+            ? '참여 시간이 만료되었어요. 계정으로 로그인하거나 새 게스트 초대 코드로 참여해 주세요.'
             : '서버가 재시작되었거나 참여 시간이 만료되었어요. 접속 코드를 입력해 다시 참여해 주세요. 작성 중인 내용은 그대로 보관하고 있어요.'}
         </p>
         {form}

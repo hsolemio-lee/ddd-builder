@@ -13,6 +13,7 @@ export type Kind =
   | 'task';
 export type ProjectRole = 'admin' | 'editor' | 'viewer';
 export interface User {
+  guest?: boolean;
   email?: string;
   siteAdmin?: boolean;
   id: string;

@@ -71,7 +71,7 @@ export default function SecurityDialog({
                 {account.id === user.id ? ' (나)' : ''}
               </strong>
               <small>
-                {account.email} ·{' '}
+                {account.guest ? '게스트' : account.email} ·{' '}
                 {account.disabled
                   ? '접근 차단'
                   : account.siteAdmin
@@ -81,7 +81,7 @@ export default function SecurityDialog({
             </div>
             <button
               className="button small"
-              disabled={busy}
+              disabled={busy || account.guest}
               onClick={() => change(account, { siteAdmin: !account.siteAdmin })}
             >
               {account.siteAdmin ? '운영 권한 해제' : '운영 권한 부여'}

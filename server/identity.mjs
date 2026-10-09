@@ -1,3 +1,4 @@
+import { createGuestAccess } from './guest-access.mjs';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import * as oidc from 'openid-client';
 
@@ -31,6 +32,7 @@ const userView = (row) => ({
   name: row.name,
   email: row.email,
   siteAdmin: Boolean(row.site_admin),
+  ...(row.guest ? { guest: true } : {}),
 });
 const tokenView = (row) => ({
   id: row.id,
@@ -203,6 +205,8 @@ export async function createIdentity({
           )
           .get(hash(raw), now, now - 1800000);
     if (!item || item.disabled) return null;
+    const guest = guests.user(item.uid);
+    if (guest && (bearer || !guests.valid(guest))) return null;
     if (!bearer && touch)
       db.prepare('UPDATE auth_sessions SET last_seen=? WHERE token_hash=?').run(
         now,
@@ -211,7 +215,13 @@ export async function createIdentity({
     return {
       token: raw,
       bearer,
-      user: userView({ ...item, id: item.uid, name: item.uname }),
+      user: userView({
+        ...item,
+        id: item.uid,
+        name: item.uname,
+        guest: Boolean(guest),
+      }),
+      ...(guest ? { projectId: guest.project_id } : {}),
       ...(bearer
         ? {
             projectId: item.project_id,
@@ -237,8 +247,16 @@ export async function createIdentity({
   function human(signed) {
     if (signed.bearer) fail(403);
   }
+  function member(signed) {
+    const current = refresh(signed);
+    human(current);
+    if (current.user.guest)
+      fail(403, '이 기능은 계정으로 로그인한 멤버만 사용할 수 있습니다.');
+    return current;
+  }
   function role(signed, projectId) {
-    if (signed.bearer && signed.projectId !== projectId) return undefined;
+    if ((signed.bearer || signed.user.guest) && signed.projectId !== projectId)
+      return undefined;
     return db
       .prepare(
         'SELECT role FROM auth_memberships WHERE project_id=? AND user_id=?',
@@ -281,6 +299,7 @@ export async function createIdentity({
     return { projects, cards: state.cards.filter((c) => ids.has(c.projectId)) };
   }
   function addAdmin(signed, projectId) {
+    member(signed);
     db.prepare('INSERT INTO auth_memberships VALUES (?,?,?)').run(
       projectId,
       signed.user.id,
@@ -386,6 +405,18 @@ export async function createIdentity({
     }
     return userView(user);
   }
+  const guests = createGuestAccess({
+    store,
+    safeguards,
+    audit,
+    onChange,
+    hash,
+    secret,
+    userView,
+    sessionCookie,
+    member,
+    project,
+  });
   async function routes({
     path,
     method,
@@ -396,6 +427,19 @@ export async function createIdentity({
     body,
     json,
   }) {
+    if (
+      await guests.routes({
+        path,
+        method,
+        req,
+        res,
+        signed,
+        requestId,
+        body,
+        json,
+      })
+    )
+      return true;
     const redirect = (location, cookies) => {
       res.writeHead(302, {
         location,
@@ -510,7 +554,7 @@ export async function createIdentity({
       return true;
     }
     if (path === '/api/tokens') {
-      human(signed);
+      member(signed);
       if (method === 'GET') {
         prune();
         json(res, 200, {
@@ -581,7 +625,7 @@ export async function createIdentity({
       (match = path.match(/^\/api\/tokens\/([^/]+)$/)) &&
       method === 'DELETE'
     ) {
-      human(signed);
+      member(signed);
       signed = refresh(signed);
       const row = db
         .prepare('SELECT * FROM auth_tokens WHERE id=? AND user_id=?')
@@ -607,14 +651,14 @@ export async function createIdentity({
         /^\/api\/projects\/([^/]+)\/(access|invitations|members)(?:\/([^/]+))?$/,
       ))
     ) {
-      human(signed);
+      member(signed);
       project(signed, match[1], 'admin');
       const [, projectId, action, targetId] = match;
       if (action === 'access' && method === 'GET' && !targetId) {
         json(res, 200, {
           members: db
             .prepare(
-              'SELECT u.id AS userId,u.name,u.email,m.role FROM auth_memberships m JOIN auth_users u ON u.id=m.user_id WHERE project_id=?',
+              'SELECT u.id AS userId,u.name,u.email,m.role FROM auth_memberships m JOIN auth_users u ON u.id=m.user_id LEFT JOIN auth_guests g ON g.user_id=u.id WHERE m.project_id=? AND g.user_id IS NULL',
             )
             .all(projectId),
           invitations: db
@@ -700,6 +744,9 @@ export async function createIdentity({
             .get(projectId, targetId)
         )
           fail(404);
+        const targetGuest = guests.user(targetId);
+        if (targetGuest && method === 'PATCH' && value.role === 'admin')
+          fail(403, '게스트에게 관리자 권한을 부여할 수 없습니다.');
         protectAdmin(
           projectId,
           targetId,
@@ -714,6 +761,7 @@ export async function createIdentity({
             db.prepare(
               'DELETE FROM auth_memberships WHERE project_id=? AND user_id=?',
             ).run(projectId, targetId);
+          if (targetGuest && method === 'DELETE') guests.revoke(targetId);
           audit(
             requestId,
             signed,
@@ -729,12 +777,14 @@ export async function createIdentity({
       }
     }
     if (path.startsWith('/api/admin/')) {
-      human(signed);
+      member(signed);
       if (!refresh(signed).user.siteAdmin) fail(403);
       if (path === '/api/admin/users' && method === 'GET') {
         json(res, 200, {
           users: db
-            .prepare('SELECT * FROM auth_users')
+            .prepare(
+              'SELECT u.*,g.user_id AS guest FROM auth_users u LEFT JOIN auth_guests g ON g.user_id=u.id',
+            )
             .all()
             .map((u) => ({ ...userView(u), disabled: Boolean(u.disabled) })),
         });
@@ -777,6 +827,8 @@ export async function createIdentity({
           .prepare('SELECT * FROM auth_users WHERE id=?')
           .get(match[1]);
         if (!target) fail(404);
+        if (guests.user(target.id) && value.siteAdmin === true)
+          fail(403, '게스트에게 운영 관리자 권한을 부여할 수 없습니다.');
         const disabled = value.disabled ?? Boolean(target.disabled),
           admin = value.siteAdmin ?? Boolean(target.site_admin);
         if (
@@ -833,6 +885,7 @@ export async function createIdentity({
     role,
     state,
     human,
+    member,
     addAdmin,
     prune,
     audit,

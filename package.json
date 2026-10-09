@@ -11,7 +11,7 @@
     "dev": "node scripts/dev.mjs",
     "build": "tsc -b && vite build",
     "start": "node server/index.mjs",
-    "test": "node --test tests/design.test.mjs tests/documents.test.mjs tests/server.test.mjs tests/mcp.test.mjs tests/security.test.mjs tests/auth.test.mjs",
+    "test": "node --test tests/design.test.mjs tests/documents.test.mjs tests/server.test.mjs tests/mcp.test.mjs tests/security.test.mjs tests/auth.test.mjs tests/guest.test.mjs",
     "mcp": "node mcp/index.mjs",
     "test:e2e": "playwright test",
     "test:docker": "node --test tests/docker.test.mjs",

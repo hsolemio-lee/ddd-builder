@@ -128,6 +128,7 @@ export default function App() {
         current.id === next.id &&
         current.siteAdmin === next.siteAdmin &&
         current.email === next.email &&
+        current.guest === next.guest &&
         current.name === next.name
           ? current
           : next,
@@ -165,7 +166,7 @@ export default function App() {
         .catch((error) => {
           if (active && error instanceof ApiError && error.status === 401) {
             source.close();
-            if (user.email) {
+            if (user.email || user.guest) {
               setWorkspace({ projects: [], cards: [] });
               setEditor(undefined);
               setDetails(undefined);
@@ -192,7 +193,7 @@ export default function App() {
   }, [projectId]);
   const project =
     workspace.projects.find((p) => p.id === projectId) || workspace.projects[0];
-  const official = Boolean(user?.email);
+  const official = Boolean(user?.email || user?.guest);
   const canEdit =
     !official || ['admin', 'editor'].includes(project?.role || '');
   const canManage = !official || project?.role === 'admin';
@@ -430,14 +431,16 @@ export default function App() {
             </select>
             <ChevronDown size={15} />
           </div>
-          <button
-            className="new-project"
-            aria-label="새 프로젝트"
-            disabled={!connected}
-            onClick={() => setProjectForm({})}
-          >
-            <Plus size={15} />새 프로젝트
-          </button>
+          {!user.guest && (
+            <button
+              className="new-project"
+              aria-label="새 프로젝트"
+              disabled={!connected}
+              onClick={() => setProjectForm({})}
+            >
+              <Plus size={15} />새 프로젝트
+            </button>
+          )}
         </div>
         <div className="sidebar-label process-label">
           설계 프로세스<span>5 STEPS</span>
@@ -467,22 +470,24 @@ export default function App() {
           })}
         </nav>
         <div className="sidebar-spacer" />
-        <button
-          className="ai-connect-card"
-          onClick={() => {
-            setDialog('mcp');
-            setSidebar(false);
-          }}
-        >
-          <span className="ai-icon">
-            <Sparkles size={18} />
-          </span>
-          <strong>AI와 함께 설계하기</strong>
-          <span>
-            MCP로 외부 AI를 연결해요
-            <ArrowRight size={14} />
-          </span>
-        </button>
+        {!user.guest && (
+          <button
+            className="ai-connect-card"
+            onClick={() => {
+              setDialog('mcp');
+              setSidebar(false);
+            }}
+          >
+            <span className="ai-icon">
+              <Sparkles size={18} />
+            </span>
+            <strong>AI와 함께 설계하기</strong>
+            <span>
+              MCP로 외부 AI를 연결해요
+              <ArrowRight size={14} />
+            </span>
+          </button>
+        )}
         <button
           className="guide-button"
           onClick={() => {
@@ -506,7 +511,10 @@ export default function App() {
         <div className="sidebar-user">
           <span className="avatar">{user.name.slice(0, 1)}</span>
           <div>
-            <strong>{user.name}</strong>
+            <strong>
+              {user.name}
+              {user.guest ? ' · 게스트' : ''}
+            </strong>
             <span>
               {official
                 ? project?.role === 'admin'
@@ -557,7 +565,7 @@ export default function App() {
                   <span
                     className={`avatar avatar-${i}`}
                     key={p.id}
-                    title={p.name}
+                    title={`${p.name}${p.guest ? ' · 게스트' : ''}`}
                   >
                     {p.name.slice(0, 1)}
                   </span>
@@ -565,19 +573,21 @@ export default function App() {
               </div>
               <span>{presence.length}명 함께 작업 중</span>
             </div>
-            <button
-              className="button share-button"
-              onClick={() => setDialog('share')}
-            >
-              <Share2 size={15} />
-              <span>
-                {official
-                  ? canManage
-                    ? '멤버 관리'
-                    : '접속 주소'
-                  : '초대하기'}
-              </span>
-            </button>
+            {!user.guest && (
+              <button
+                className="button share-button"
+                onClick={() => setDialog('share')}
+              >
+                <Share2 size={15} />
+                <span>
+                  {official
+                    ? canManage
+                      ? '멤버 관리'
+                      : '접속 주소'
+                    : '초대하기'}
+                </span>
+              </button>
+            )}
           </div>
         </header>
         {notice && (
@@ -636,15 +646,21 @@ export default function App() {
                 <Blocks size={36} />
               </div>
               <h2>첫 도메인 이야기를 시작해 볼까요?</h2>
-              <p>프로젝트를 만들고 팀과 함께 문제를 탐색해 보세요.</p>
-              <button
-                className="button primary"
-                disabled={!connected}
-                onClick={() => setProjectForm({})}
-              >
-                <Plus size={16} />
-                프로젝트 만들기
-              </button>
+              <p>
+                {user.guest
+                  ? '참여 권한과 세션을 관리자에게 확인해 주세요.'
+                  : '프로젝트를 만들고 팀과 함께 문제를 탐색해 보세요.'}
+              </p>
+              {!user.guest && (
+                <button
+                  className="button primary"
+                  disabled={!connected}
+                  onClick={() => setProjectForm({})}
+                >
+                  <Plus size={16} />
+                  프로젝트 만들기
+                </button>
+              )}
             </div>
           ) : (
             <>
@@ -1004,7 +1020,7 @@ export default function App() {
       {securityOpen && (
         <SecurityDialog user={user} onClose={() => setSecurityOpen(false)} />
       )}
-      {dialog && official && dialog !== 'export' && (
+      {dialog && official && !user.guest && dialog !== 'export' && (
         <AccessDialog
           key={`${project?.id}-${dialog}`}
           mode={dialog}
