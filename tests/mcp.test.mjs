@@ -38,6 +38,7 @@ test('MCP lists projects and exposes one project as tools, resources and an anal
   const { client } = await setup(t);
   const names = (await client.listTools()).tools.map((tool) => tool.name);
   assert.deepEqual(names.sort(), [
+    'get_aggregate_design',
     'get_project_board',
     'list_projects',
     'review_design',
@@ -214,4 +215,101 @@ test('MCP exposes review and structured design metadata with Mermaid context rel
       (i) => i.cardId === cmd.id && i.code === 'command-result',
     ),
   );
+});
+
+test('MCP reads aggregate behavior and safely patches one rule, resources and learning prompts', async (t) => {
+  const { client } = await setup(t, { readOnly: false });
+  const projectId = value(
+    await client.callTool({ name: 'list_projects', arguments: {} }),
+  )[0].id;
+  const create = (args) =>
+    client
+      .callTool({ name: 'create_card', arguments: { projectId, ...args } })
+      .then(value);
+  const command = await create({
+    stage: 'events',
+    kind: 'command',
+    title: '새 명령',
+  });
+  let aggregate = await create({
+    stage: 'aggregates',
+    kind: 'aggregate',
+    title: '새 경계',
+    data: { root: 'Root', invariants: '기존 업무 설명' },
+    aggregateDesign: {
+      commandIds: [command.id],
+      rules: [
+        {
+          id: 'r1',
+          statement: '규칙 하나',
+          commandIds: [command.id],
+          examples: [
+            {
+              id: 'e1',
+              given: '초기 상태',
+              when: '명령 실행',
+              then: '기대 결과',
+            },
+          ],
+        },
+        { id: 'r2', statement: '규칙 둘' },
+      ],
+    },
+  });
+  const read = value(
+    await client.callTool({
+      name: 'get_aggregate_design',
+      arguments: { aggregateId: aggregate.id },
+    }),
+  );
+  assert.equal(read.commands[0].card.id, command.id);
+  aggregate = value(
+    await client.callTool({
+      name: 'patch_aggregate_design',
+      arguments: {
+        aggregateId: aggregate.id,
+        revision: aggregate.revision,
+        upsertRules: [{ id: 'r1', statement: '수정한 규칙' }],
+      },
+    }),
+  );
+  assert.equal(
+    aggregate.aggregateDesign.rules[0].examples[0].given,
+    '초기 상태',
+  );
+  assert.equal(aggregate.aggregateDesign.rules[1].statement, '규칙 둘');
+  assert.equal(aggregate.data.invariants, '기존 업무 설명');
+  const stale = await client.callTool({
+    name: 'patch_aggregate_design',
+    arguments: {
+      aggregateId: aggregate.id,
+      revision: 1,
+      coordination: '낡은 쓰기',
+    },
+  });
+  assert.equal(stale.isError, true);
+  assert.equal(JSON.parse(stale.content[0].text).status, 409);
+  const resource = await client.readResource({
+    uri: `ddd://aggregates/${aggregate.id}`,
+  });
+  assert.equal(
+    JSON.parse(resource.contents[0].text).aggregate.revision,
+    aggregate.revision,
+  );
+  const learning = await client.readResource({
+    uri: 'ddd://learning/aggregates',
+  });
+  assert.ok(
+    JSON.parse(learning.contents[0].text).lesson.concepts.some((c) =>
+      c.title.includes('애그리게이트'),
+    ),
+  );
+  const prompt = await client.getPrompt({
+    name: 'analyze_aggregate_design',
+    arguments: { aggregateId: aggregate.id },
+  });
+  assert.ok(
+    prompt.messages[0].content.text.includes('사례는 실행한 테스트가 아닙니다'),
+  );
+  assert.ok(prompt.messages[0].content.text.includes('수정한 규칙'));
 });

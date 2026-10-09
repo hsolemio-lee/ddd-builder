@@ -6,6 +6,8 @@ import { api, ApiError } from '../api';
 import Modal from './Modal';
 import CardLinks from './CardLinks';
 import ContextRelationships from './ContextRelationships';
+import AggregateDesignEditor from './AggregateDesignEditor';
+import { aggregateDesignOf } from '../../shared/aggregate.mjs';
 import { statuses, scenarios } from '../../shared/design.mjs';
 
 export default function CardEditor({
@@ -96,6 +98,7 @@ export default function CardEditor({
       description: draft.description,
       contextId: draft.contextId,
       data: draft.data,
+      aggregateDesign: draft.aggregateDesign,
       position: draft.position,
       status: draft.status,
       decision: draft.decision,
@@ -210,6 +213,7 @@ export default function CardEditor({
               <label>
                 소속 컨텍스트
                 <select
+                  aria-label="소속 컨텍스트"
                   value={draft.contextId || ''}
                   onChange={(e) =>
                     changeDraft({ contextId: e.target.value || null })
@@ -323,6 +327,15 @@ export default function CardEditor({
                   />
                 </label>
               </>
+            )}
+            {draft.stage === 'aggregates' && (
+              <AggregateDesignEditor
+                design={aggregateDesignOf(draft)}
+                cards={cards}
+                contextId={draft.contextId}
+                id={base?.id}
+                onChange={(aggregateDesign) => changeDraft({ aggregateDesign })}
+              />
             )}
             {draft.stage === 'tasks' && (
               <>

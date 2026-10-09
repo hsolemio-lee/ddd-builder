@@ -34,6 +34,26 @@ export interface CardLink {
   targetId: string;
   kind: 'flow' | 'related' | 'dependsOn';
 }
+export interface AggregateExample {
+  id: string;
+  title: string;
+  type: 'normal' | 'rejection' | 'concurrency';
+  given: string;
+  when: string;
+  then: string;
+}
+export interface AggregateRule {
+  id: string;
+  statement: string;
+  commandIds: string[];
+  examples: AggregateExample[];
+}
+export interface AggregateDesign {
+  commandIds: string[];
+  rules: AggregateRule[];
+  externalReferences: { aggregateId: string; reason: string }[];
+  coordination: string;
+}
 export interface Card {
   status: AgreementStatus;
   decision: string;
@@ -47,6 +67,7 @@ export interface Card {
   description: string;
   contextId: string | null;
   data: Record<string, string | boolean>;
+  aggregateDesign?: AggregateDesign;
   position: number;
   revision: number;
   createdAt: string;
@@ -66,6 +87,7 @@ export type CardDraft = Pick<
   | 'decision'
   | 'scenario'
   | 'links'
+  | 'aggregateDesign'
 >;
 export interface Workspace {
   projects: Project[];

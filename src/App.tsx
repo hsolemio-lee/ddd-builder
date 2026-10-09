@@ -34,6 +34,7 @@ import SecurityDialog from './components/SecurityDialog';
 import FlowBoard from './components/FlowBoard';
 import DesignReview from './components/DesignReview';
 import ContextMap from './components/ContextMap';
+import AggregateBoard from './components/AggregateBoard';
 import LearningGuide from './components/LearningGuide';
 import { normalizeCard, statuses, scenarios } from '../shared/design.mjs';
 
@@ -70,7 +71,9 @@ export default function App() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [contextFilter, setContextFilter] = useState('all');
   const [scenarioFilter, setScenarioFilter] = useState('all');
-  const [view, setView] = useState<'cards' | 'flow' | 'map'>('cards');
+  const [view, setView] = useState<'cards' | 'flow' | 'map' | 'aggregate'>(
+    'cards',
+  );
   const [reviewOpen, setReviewOpen] = useState(false);
   const [notice, setNotice] = useState('');
   const [receivedState, setReceivedState] = useState(false);
@@ -230,7 +233,7 @@ export default function App() {
     (c) =>
       (filter === 'all' || c.kind === filter) &&
       (!query ||
-        `${c.title} ${c.description} ${c.decision} ${Object.values(c.data).join(' ')}`
+        `${c.title} ${c.description} ${c.decision} ${Object.values(c.data).join(' ')} ${JSON.stringify(c.aggregateDesign || '')}`
           .toLowerCase()
           .includes(query.toLowerCase())),
   );
@@ -253,7 +256,7 @@ export default function App() {
         c.scenario === scenarioFilter ||
         c.scenario === 'shared') &&
       (!query ||
-        `${c.title} ${c.description} ${c.decision} ${Object.values(c.data).join(' ')} ${mapContexts.find((ctx) => ctx.id === c.contextId)?.title || ''}`
+        `${c.title} ${c.description} ${c.decision} ${Object.values(c.data).join(' ')} ${JSON.stringify(c.aggregateDesign || '')} ${mapContexts.find((ctx) => ctx.id === c.contextId)?.title || ''}`
           .toLowerCase()
           .includes(query.toLowerCase())),
   );
@@ -268,7 +271,13 @@ export default function App() {
     setStatusFilter('all');
     setContextFilter('all');
     setScenarioFilter('all');
-    setView(nextStage === 'contexts' ? 'map' : 'cards');
+    setView(
+      nextStage === 'contexts'
+        ? 'map'
+        : nextStage === 'aggregates'
+          ? 'aggregate'
+          : 'cards',
+    );
   }
   function navigate(next: Stage) {
     resetDesignFilters(next);
@@ -726,6 +735,28 @@ export default function App() {
                     </button>
                   </div>
                 )}
+                {stage === 'aggregates' && (
+                  <div
+                    className="view-toggle"
+                    role="group"
+                    aria-label="애그리게이트 보기"
+                  >
+                    <button
+                      className={view === 'aggregate' ? 'active' : ''}
+                      aria-pressed={view === 'aggregate'}
+                      onClick={() => setView('aggregate')}
+                    >
+                      일관성 경계
+                    </button>
+                    <button
+                      className={view === 'cards' ? 'active' : ''}
+                      aria-pressed={view === 'cards'}
+                      onClick={() => setView('cards')}
+                    >
+                      카드 보기
+                    </button>
+                  </div>
+                )}
                 <label>
                   검토 상태 필터
                   <select
@@ -819,8 +850,15 @@ export default function App() {
                   onOpen={openCard}
                 />
               )}
-              {view === 'map' &&
-              (stage === 'events' || stage === 'contexts') ? (
+              {view === 'aggregate' && stage === 'aggregates' ? (
+                <AggregateBoard
+                  cards={displayedCards}
+                  allCards={projectCards}
+                  readOnly={!canEdit}
+                  onOpen={openCard}
+                />
+              ) : view === 'map' &&
+                (stage === 'events' || stage === 'contexts') ? (
                 <ContextMap
                   key={`${project.id}:${stage}`}
                   contexts={mapContexts}

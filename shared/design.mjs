@@ -1,3 +1,4 @@
+import { aggregateReview } from './aggregate.mjs';
 export const statuses = {
   hypothesis: '가설',
   proposed: '제안',
@@ -69,7 +70,7 @@ export function reviewBoard(cards) {
     else duplicates.set(key, card.id);
     if (
       hasContexts &&
-      ['event', 'command', 'policy', 'aggregate'].includes(card.kind) &&
+      ['event', 'command', 'policy'].includes(card.kind) &&
       !card.contextId
     )
       add(
@@ -78,14 +79,7 @@ export function reviewBoard(cards) {
         '이 사실·규칙을 소유하는 컨텍스트를 검토해 주세요.',
       );
     if (card.kind === 'aggregate') {
-      if (!card.data.root?.trim())
-        add(card, 'aggregate-root', '애그리게이트 루트를 정해 주세요.');
-      if (!card.data.invariants?.trim())
-        add(
-          card,
-          'aggregate-invariants',
-          '같은 트랜잭션 안에서 지킬 업무 불변식을 적어 주세요.',
-        );
+      issues.push(...aggregateReview(card, cards));
       const rootKey = `${card.contextId || ''}:${String(card.data.root || '')
         .trim()
         .toLowerCase()}`;

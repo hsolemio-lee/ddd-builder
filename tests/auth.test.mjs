@@ -564,6 +564,52 @@ test('MCP tool writes stay forbidden with a read token even when client write to
   });
   const read = await client.callTool({ name: 'list_projects', arguments: {} });
   assert.notEqual(read.isError, true);
+  const aggregate = (await s.request('/state', owner.cookie)).value.cards.find(
+    (c) => c.projectId === project.id && c.kind === 'aggregate',
+  );
+  const design = await client.callTool({
+    name: 'get_aggregate_design',
+    arguments: { aggregateId: aggregate.id },
+  });
+  assert.notEqual(design.isError, true);
+  const blockedPatch = await client.callTool({
+    name: 'patch_aggregate_design',
+    arguments: {
+      aggregateId: aggregate.id,
+      revision: aggregate.revision,
+      upsertRules: [{ id: 'forbidden-rule', statement: '불허 변경' }],
+    },
+  });
+  assert.equal(blockedPatch.isError, true);
+  assert.equal(JSON.parse(blockedPatch.content[0].text).status, 403);
+  assert.equal(
+    (await s.request('/state', owner.cookie)).value.cards.find(
+      (c) => c.id === aggregate.id,
+    ).revision,
+    aggregate.revision,
+  );
+  const foreignProject = (
+    await s.request('/projects', owner.cookie, 'POST', {
+      name: '범위 밖 프로젝트',
+    })
+  ).value;
+  const foreignAggregate = (
+    await s.request(
+      `/projects/${foreignProject.id}/cards`,
+      owner.cookie,
+      'POST',
+      { stage: 'aggregates', kind: 'aggregate', title: '범위 밖 모델' },
+    )
+  ).value;
+  assert.equal(
+    (
+      await client.callTool({
+        name: 'get_aggregate_design',
+        arguments: { aggregateId: foreignAggregate.id },
+      })
+    ).isError,
+    true,
+  );
   const write = await client.callTool({
     name: 'create_card',
     arguments: {
@@ -819,9 +865,14 @@ test('HTTP MCP isolates credentials, preserves tools and resources, and enforces
   const writer = await connect(write.token);
   assert.deepEqual(
     (await reader.listTools()).tools.map((x) => x.name),
-    ['list_projects', 'get_project_board', 'review_design'],
+    [
+      'list_projects',
+      'get_project_board',
+      'review_design',
+      'get_aggregate_design',
+    ],
   );
-  assert.equal((await writer.listTools()).tools.length, 5);
+  assert.equal((await writer.listTools()).tools.length, 7);
   const [a, b] = await Promise.all([
     reader.callTool({ name: 'list_projects' }),
     writer.callTool({ name: 'list_projects' }),
@@ -885,7 +936,7 @@ test('HTTP MCP isolates credentials, preserves tools and resources, and enforces
   );
   await s.request(`/tokens/${read.credential.id}`, owner.cookie, 'DELETE');
   await assert.rejects(reader.listTools());
-  assert.equal((await writer.listTools()).tools.length, 5);
+  assert.equal((await writer.listTools()).tools.length, 7);
 });
 
 test('HTTP MCP rejects cookies, invalid origins, unsupported methods and oversized bodies', async (t) => {

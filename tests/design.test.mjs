@@ -521,3 +521,217 @@ test('flow direction can change without losing branches or return edges', () => 
   );
   assert.equal(layoutFlow(cards, { width: 390 }).direction, 'vertical');
 });
+
+test('aggregate designs preserve legacy text, validate ownership and patch rules without losing examples or external references', async (t) => {
+  const { req, project, create } = await setup(t);
+  const context = (
+    await req(`/projects/${project.id}/cards`, 'POST', {
+      stage: 'contexts',
+      kind: 'context',
+      title: '주문 컨텍스트',
+    })
+  ).data;
+  const event = await create('event', '주문이 접수되었다', {
+    contextId: context.id,
+  });
+  const command = await create('command', '주문 접수', {
+    contextId: context.id,
+    links: [{ kind: 'flow', targetId: event.id }],
+  });
+  const outside = (
+    await req(`/projects/${project.id}/cards`, 'POST', {
+      stage: 'aggregates',
+      kind: 'aggregate',
+      title: '결제 거래',
+      data: { root: 'Payment' },
+    })
+  ).data;
+  const design = {
+    commandIds: [command.id],
+    rules: [
+      {
+        id: 'minimum-lines',
+        statement: '항목은 하나 이상이다',
+        commandIds: [command.id],
+        examples: [
+          {
+            id: 'valid',
+            title: '정상 주문',
+            type: 'normal',
+            given: '항목이 한 개 있다',
+            when: '접수를 요청한다',
+            then: '접수된다',
+          },
+          {
+            id: 'empty',
+            title: '빈 주문',
+            type: 'rejection',
+            given: '항목이 없다',
+            when: '접수를 요청한다',
+            then: '거절되고 상태가 바뀌지 않는다',
+          },
+        ],
+      },
+      {
+        id: 'quantity',
+        statement: '수량은 양수다',
+        commandIds: [command.id],
+        examples: [],
+      },
+    ],
+    externalReferences: [
+      { aggregateId: outside.id, reason: '결제 거래 ID를 참조한다' },
+    ],
+    coordination: '승인 결과를 기다리고 타임아웃을 검토한다',
+  };
+  let aggregate = (
+    await req(`/projects/${project.id}/cards`, 'POST', {
+      stage: 'aggregates',
+      kind: 'aggregate',
+      title: '주문 모델',
+      contextId: context.id,
+      data: {
+        root: 'Order',
+        entities: 'OrderLine',
+        valueObjects: 'Money',
+        invariants: '기존 설명은 보존한다',
+      },
+      aggregateDesign: design,
+      links: [{ kind: 'related', targetId: command.id }],
+      status: 'agreed',
+      decision: '담당자와 사례 검토',
+    })
+  ).data;
+  assert.ok(aggregate.id, JSON.stringify(aggregate));
+  const read = (await req(`/cards/${aggregate.id}/aggregate-design`)).data;
+  assert.equal(read.commands[0].resultEvents[0].id, event.id);
+  assert.equal(read.externalReferences[0].aggregate.id, outside.id);
+  assert.ok(!read.issues.some((i) => i.code === 'aggregate-example-detail'));
+  const before = structuredClone(aggregate);
+  const patch = await req(`/cards/${aggregate.id}/aggregate-design`, 'PATCH', {
+    revision: aggregate.revision,
+    upsertRules: [
+      {
+        id: 'minimum-lines',
+        upsertExamples: [
+          { id: 'empty', then: '거절하고 접수 이벤트를 만들지 않는다' },
+        ],
+      },
+    ],
+  });
+  assert.equal(patch.status, 200, JSON.stringify(patch.data));
+  aggregate = patch.data;
+  assert.equal(aggregate.status, 'proposed');
+  assert.deepEqual(aggregate.data, before.data);
+  assert.deepEqual(aggregate.links, before.links);
+  assert.deepEqual(
+    aggregate.aggregateDesign.externalReferences,
+    design.externalReferences,
+  );
+  assert.equal(aggregate.aggregateDesign.coordination, design.coordination);
+  assert.equal(
+    aggregate.aggregateDesign.rules[0].examples[1].given,
+    '항목이 없다',
+  );
+  assert.equal(
+    aggregate.aggregateDesign.rules[0].examples[1].then,
+    '거절하고 접수 이벤트를 만들지 않는다',
+  );
+  assert.deepEqual(aggregate.aggregateDesign.rules[1], design.rules[1]);
+  assert.equal(
+    (
+      await req(`/cards/${aggregate.id}/aggregate-design`, 'PATCH', {
+        revision: before.revision,
+        coordination: '낡은 쓰기',
+      })
+    ).status,
+    409,
+  );
+  const other = (await req('/projects', 'POST', { name: '다른 영역' })).data;
+  const foreign = (
+    await req(`/projects/${other.id}/cards`, 'POST', {
+      stage: 'aggregates',
+      kind: 'aggregate',
+      title: '다른 모델',
+    })
+  ).data;
+  for (const changes of [
+    { externalReferences: [{ aggregateId: foreign.id }] },
+    { externalReferences: [{ aggregateId: aggregate.id }] },
+    { commandIds: [event.id] },
+    { upsertRules: [{ id: 'minimum-lines', commandIds: [foreign.id] }] },
+    { removeRuleIds: ['missing'] },
+    { upsertRules: [{ id: 'minimum-lines', removeExampleIds: ['missing'] }] },
+    { upsertRules: [{ id: 'duplicate' }, { id: 'duplicate' }] },
+    { unexpected: true },
+  ]) {
+    assert.equal(
+      (
+        await req(`/cards/${aggregate.id}/aggregate-design`, 'PATCH', {
+          revision: aggregate.revision,
+          ...changes,
+        })
+      ).status,
+      400,
+      JSON.stringify(changes),
+    );
+  }
+  assert.equal(
+    (
+      await req(`/projects/${project.id}/cards`, 'POST', {
+        stage: 'aggregates',
+        kind: 'aggregate',
+        title: '중복 명령 처리자',
+        contextId: context.id,
+        aggregateDesign: { commandIds: [command.id] },
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await req(`/cards/${command.id}`, 'PATCH', {
+        revision: command.revision,
+        contextId: null,
+      })
+    ).status,
+    400,
+  );
+  const md = (await req(`/projects/${project.id}/export?format=markdown`)).data;
+  assert.ok(
+    md.includes('minimum-lines') &&
+      md.includes('Given: 항목이 없다') &&
+      md.includes('결제 거래'),
+  );
+  const exported = (await req(`/projects/${project.id}/export?format=json`))
+    .data;
+  assert.deepEqual(
+    exported.cards.find((c) => c.id === aggregate.id).aggregateDesign,
+    aggregate.aggregateDesign,
+  );
+  assert.equal(
+    (
+      await req(`/cards/${command.id}`, 'DELETE', {
+        revision: command.revision,
+      })
+    ).status,
+    200,
+  );
+  let current = (await req('/state')).data.cards.find(
+    (c) => c.id === aggregate.id,
+  );
+  assert.deepEqual(current.aggregateDesign.commandIds, []);
+  assert.deepEqual(current.aggregateDesign.rules[0].commandIds, []);
+  assert.equal(current.aggregateDesign.rules[0].examples.length, 2);
+  assert.equal(current.revision, aggregate.revision + 1);
+  assert.equal(
+    (
+      await req(`/cards/${outside.id}`, 'DELETE', {
+        revision: outside.revision,
+      })
+    ).status,
+    200,
+  );
+  current = (await req('/state')).data.cards.find((c) => c.id === aggregate.id);
+  assert.deepEqual(current.aggregateDesign.externalReferences, []);
+});

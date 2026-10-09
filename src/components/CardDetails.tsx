@@ -3,6 +3,7 @@ import { kinds } from '../workflow';
 import { statuses, scenarios, linkKinds } from '../../shared/design.mjs';
 import Modal from './Modal';
 import ContextRelationships from './ContextRelationships';
+import AggregateOverview from './AggregateOverview';
 
 const labels: Record<string, string> = {
   relationships: '컨텍스트 관계',
@@ -24,7 +25,11 @@ export default function CardDetails({
   onClose: () => void;
 }) {
   return (
-    <Modal title={card.title} onClose={onClose}>
+    <Modal
+      title={card.title}
+      className={card.kind === 'aggregate' ? 'aggregate-detail-modal' : ''}
+      onClose={onClose}
+    >
       <div className="share-body card-details">
         <span className="tiny-tag">{kinds[card.kind].label} · 조회 전용</span>
         <span className={`agreement-badge status-${card.status}`}>
@@ -59,7 +64,10 @@ export default function CardDetails({
             format={String(card.data.relationshipFormat || 'text')}
           />
         )}
-        {Object.entries(card.data)
+        {card.kind === 'aggregate' && (
+          <AggregateOverview card={card} cards={cards} />
+        )}
+        {Object.entries(card.kind === 'aggregate' ? {} : card.data)
           .filter(
             ([name]) =>
               card.kind !== 'context' ||

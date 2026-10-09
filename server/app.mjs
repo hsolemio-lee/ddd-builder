@@ -1,3 +1,10 @@
+import {
+  validateAggregateDesign,
+  aggregateDesignOf,
+  patchAggregateDesign,
+  removeAggregateReference,
+  buildAggregateDesign,
+} from '../shared/aggregate.mjs';
 import { createServer } from 'node:http';
 import { handleMcpHttp } from '../mcp/http.mjs';
 import {
@@ -81,6 +88,7 @@ function cardFields(body, projectId, store, current) {
           'description',
           'contextId',
           'data',
+          'aggregateDesign',
           'position',
           'status',
           'decision',
@@ -95,6 +103,7 @@ function cardFields(body, projectId, store, current) {
           'description',
           'contextId',
           'data',
+          'aggregateDesign',
           'position',
           'status',
           'decision',
@@ -109,6 +118,9 @@ function cardFields(body, projectId, store, current) {
     description: current?.description ?? '',
     contextId: current?.contextId ?? null,
     data: current?.data ?? {},
+    ...(current?.aggregateDesign
+      ? { aggregateDesign: current.aggregateDesign }
+      : {}),
     position: current?.position ?? 0,
     status: current?.status ?? 'proposed',
     decision: current?.decision ?? '',
@@ -186,6 +198,28 @@ function cardFields(body, projectId, store, current) {
         '흐름은 행위자 → 명령 → 이벤트 → 정책 → 명령 또는 이벤트 → 이벤트로 연결해 주세요.',
       );
   }
+  if (value.aggregateDesign !== undefined) {
+    if (value.kind !== 'aggregate')
+      fail(400, '애그리게이트 카드에만 설계를 지정할 수 있습니다.');
+    value.aggregateDesign = validateAggregateDesign(
+      value.aggregateDesign,
+      { ...value, id: current?.id, projectId },
+      store.state().cards,
+    );
+  }
+  if (
+    current?.kind === 'command' &&
+    (value.kind !== 'command' || value.contextId !== current.contextId) &&
+    store
+      .state()
+      .cards.some(
+        (c) =>
+          c.projectId === projectId &&
+          c.kind === 'aggregate' &&
+          aggregateDesignOf(c).commandIds.includes(current.id),
+      )
+  )
+    fail(400, '명령의 처리 애그리게이트 연결을 먼저 변경해 주세요.');
   if (current && current.kind !== value.kind) {
     for (const source of store
       .state()
@@ -210,6 +244,7 @@ function cardFields(body, projectId, store, current) {
       'description',
       'contextId',
       'data',
+      'aggregateDesign',
       'scenario',
       'links',
     ].some((key) => JSON.stringify(value[key]) !== JSON.stringify(current[key]))
@@ -312,6 +347,37 @@ function markdown(project, cards) {
           '',
           `컨텍스트: ${escape(cards.find((c) => c.id === card.contextId)?.title ?? '')}`,
         );
+      if (card.kind === 'aggregate' && card.aggregateDesign) {
+        sections.push('', '애그리게이트 구조화 설계:');
+        const design = aggregateDesignOf(card);
+        for (const commandId of design.commandIds)
+          sections.push(
+            '',
+            `처리 명령: ${escape(cards.find((c) => c.id === commandId)?.title || commandId)} (${escape(commandId)})`,
+          );
+        for (const rule of design.rules) {
+          sections.push(
+            '',
+            `규칙 ${escape(rule.id)}: ${escape(rule.statement)}`,
+            `명령: ${rule.commandIds.map(escape).join(', ')}`,
+          );
+          for (const example of rule.examples)
+            sections.push(
+              '',
+              `검증 사례 ${escape(example.id)}: ${escape(example.title)} (${example.type})`,
+              `Given: ${escape(example.given)}`,
+              `When: ${escape(example.when)}`,
+              `Then: ${escape(example.then)}`,
+            );
+        }
+        for (const ref of design.externalReferences)
+          sections.push(
+            '',
+            `경계 밖 참조: ${escape(cards.find((c) => c.id === ref.aggregateId)?.title || ref.aggregateId)} (${escape(ref.aggregateId)}) — ${escape(ref.reason)}`,
+          );
+        if (design.coordination)
+          sections.push('', `조정·실패 정책: ${escape(design.coordination)}`);
+      }
       for (const [key, value] of Object.entries(card.data)) {
         if (key === 'relationshipDiagram' && value) {
           const fence = '`'.repeat(
@@ -958,6 +1024,47 @@ export async function createApp({
         return;
       }
       if (
+        (match = path.match(/^\/api\/cards\/([^/]+)\/aggregate-design$/)) &&
+        ['GET', 'PATCH'].includes(method)
+      ) {
+        const value = method === 'PATCH' ? await body(req) : undefined;
+        const current = store.card(match[1]);
+        if (!current) fail(404, '카드를 찾을 수 없습니다.');
+        authorize(current.projectId, method === 'PATCH' ? 'editor' : 'viewer');
+        if (current.kind !== 'aggregate')
+          fail(400, '애그리게이트 카드를 선택해 주세요.');
+        if (method === 'GET') {
+          json(
+            res,
+            200,
+            buildAggregateDesign(
+              current,
+              store
+                .state()
+                .cards.filter((c) => c.projectId === current.projectId),
+            ),
+          );
+          return;
+        }
+        revision(value, current);
+        const { revision: requestedRevision, ...updates } = value;
+        const design = patchAggregateDesign(current, updates);
+        const fields = cardFields(
+          { aggregateDesign: design },
+          current.projectId,
+          store,
+          current,
+        );
+        const card = changed(current, fields, user);
+        store.transaction(() => {
+          store.saveCard(card);
+          auditChange('card.change', card.projectId, card.id);
+        });
+        broadcast();
+        json(res, 200, card);
+        return;
+      }
+      if (
         (match = path.match(/^\/api\/cards\/([^/]+)\/move$/)) &&
         method === 'POST'
       ) {
@@ -1022,23 +1129,30 @@ export async function createApp({
             for (const linked of store
               .state()
               .cards.filter(
-                (c) =>
-                  c.projectId === current.projectId &&
-                  c.links.some((l) => l.targetId === current.id),
-              ))
+                (c) => c.projectId === current.projectId && c.id !== current.id,
+              )) {
+              const links = linked.links.filter(
+                (l) => l.targetId !== current.id,
+              );
+              const aggregateDesign =
+                linked.kind === 'aggregate'
+                  ? removeAggregateReference(linked, current.id)
+                  : undefined;
+              if (links.length === linked.links.length && !aggregateDesign)
+                continue;
               store.saveCard(
                 changed(
                   linked,
                   {
-                    links: linked.links.filter(
-                      (l) => l.targetId !== current.id,
-                    ),
+                    links,
+                    ...(aggregateDesign ? { aggregateDesign } : {}),
                     status:
                       linked.status === 'agreed' ? 'proposed' : linked.status,
                   },
                   user,
                 ),
               );
+            }
             store.deleteCard(current.id);
             auditChange('card.delete', current.projectId, current.id);
           });
@@ -1052,6 +1166,7 @@ export async function createApp({
           'description',
           'contextId',
           'data',
+          'aggregateDesign',
           'position',
           'status',
           'decision',
