@@ -1,6 +1,9 @@
+export { documentationGuide } from './documentation-guide.mjs';
+import type { FieldExample } from './documentation-guide.mjs';
 import type { Stage } from '../src/types';
 export type Lesson = {
   goal: string;
+  fieldExamples?: FieldExample[];
   concepts: { title: string; body: string }[];
   example: string;
   practice: string[];

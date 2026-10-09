@@ -1,3 +1,6 @@
+import { buildDomainDocuments } from '../shared/documents.mjs';
+import { documentArchive } from './document-archive.mjs';
+import { documentationKeys } from '../shared/documentation-fields.mjs';
 import {
   validateAggregateDesign,
   aggregateDesignOf,
@@ -157,7 +160,10 @@ function cardFields(body, projectId, store, current) {
         : value.kind === 'task'
           ? { assignee: '', done: false }
           : {};
-  allowed(value.data, Object.keys(defaults));
+  allowed(value.data, [
+    ...Object.keys(defaults),
+    ...(documentationKeys[value.kind] || []),
+  ]);
   value.data = { ...defaults, ...value.data };
   for (const [key, field] of Object.entries(value.data)) {
     if (key === 'done') {
@@ -926,6 +932,28 @@ export async function createApp({
         return;
       }
       if (
+        (match = path.match(/^\/api\/projects\/([^/]+)\/documents$/)) &&
+        method === 'GET'
+      ) {
+        authorize(match[1]);
+        const project = store.project(match[1]);
+        if (!project) fail(404, '프로젝트를 찾을 수 없습니다.');
+        const documents = buildDomainDocuments(project, store.state().cards, {
+          contextId: url.searchParams.get('contextId') ?? undefined,
+        });
+        const documentPath = url.searchParams.get('path');
+        if (documentPath !== null) {
+          const file = documents.files.find((f) => f.path === documentPath);
+          if (!file)
+            fail(
+              404,
+              '문서를 찾을 수 없습니다. 문서 목록의 경로를 사용해 주세요.',
+            );
+          json(res, 200, { ...documents, files: [file] });
+        } else json(res, 200, documents);
+        return;
+      }
+      if (
         (match = path.match(/^\/api\/projects\/([^/]+)\/export$/)) &&
         method === 'GET'
       ) {
@@ -933,11 +961,25 @@ export async function createApp({
         const project = store.project(match[1]);
         if (!project) fail(404, '프로젝트를 찾을 수 없습니다.');
         const format = url.searchParams.get('format') || 'json';
-        if (!['json', 'markdown'].includes(format))
+        if (!['json', 'markdown', 'documents'].includes(format))
           fail(400, '내보내기 형식이 올바르지 않습니다.');
         const cards = store
           .state()
           .cards.filter((c) => c.projectId === project.id);
+        if (format === 'documents') {
+          const documents = buildDomainDocuments(project, cards, {
+            contextId: url.searchParams.get('contextId') ?? undefined,
+          });
+          const archive = documentArchive(documents.files);
+          res.writeHead(200, {
+            'content-type': 'application/zip',
+            'content-disposition': `attachment; filename="ddd-documents-${project.id}.zip"`,
+            'cache-control': 'no-store',
+          });
+          auditChange('project.export', project.id, project.id);
+          res.end(archive);
+          return;
+        }
         const filename = `ddd-project-${project.id}.${format === 'json' ? 'json' : 'md'}`;
         res.writeHead(200, {
           'content-type':

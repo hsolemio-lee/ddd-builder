@@ -3940,3 +3940,59 @@ summary:focus-visible {
     padding: 12px;
   }
 }
+
+.documentation-fields,
+.document-export,
+.document-preview {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  min-width: 0;
+}
+.documentation-fields summary,
+.document-preview summary {
+  cursor: pointer;
+  font-weight: 650;
+  margin-bottom: 10px;
+}
+.documentation-field {
+  margin: 14px 0;
+}
+.field-example {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 4px 0 8px;
+  line-height: 1.6;
+}
+.document-export label,
+.documentation-fields label {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+.document-export select {
+  width: 100%;
+  min-width: 0;
+}
+.document-preview {
+  margin-top: 12px;
+}
+.document-content {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: auto;
+  max-height: 420px;
+  font-size: 12px;
+  line-height: 1.7;
+  padding: 12px;
+  background: #f5f6f1;
+  border-radius: 8px;
+}
+
+.learning-section > summary {
+  cursor: pointer;
+  font-weight: 650;
+}
+.learning-section code {
+  overflow-wrap: anywhere;
+}

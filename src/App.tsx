@@ -400,7 +400,7 @@ export default function App() {
           <span>
             ddd<span className="brand-slash">/</span>builder
           </span>
-          <span className="beta-label">LOCAL</span>
+          <span className="beta-label">DESIGN</span>
         </div>
         <div className="workspace-switch">
           <div className="sidebar-label">작업 공간</div>
@@ -1014,6 +1014,7 @@ export default function App() {
       )}
       {dialog && (!official || dialog === 'export') && (
         <ShareDialog
+          cards={projectCards}
           mode={dialog}
           project={project}
           onClose={() => setDialog(undefined)}

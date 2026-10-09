@@ -1,3 +1,5 @@
+import { aggregateFieldExamples } from './documentation-guide.mjs';
+export { documentationGuide } from './documentation-guide.mjs';
 export const lessons = {
   discovery: {
     goal: '해결할 업무 문제와 모델에서 사용할 언어를 도메인 담당자와 함께 발견합니다.',
@@ -138,6 +140,7 @@ export const lessons = {
     },
   },
   aggregates: {
+    fieldExamples: aggregateFieldExamples,
     goal: '업무 불변식에서 출발해 한 번의 변경에서 일관성을 지킬 경계를 설계합니다.',
     concepts: [
       {

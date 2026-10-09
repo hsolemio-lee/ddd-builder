@@ -32,3 +32,24 @@
 본문은 최대 128 KiB다. 규칙 최대 40개, 규칙당 사례 최대 20개, 명령 최대 100개, 외부 참조 최대 40개를 검증한다. 중복 ID, 존재하지 않는 삭제 항목, 다른 프로젝트 참조, 자기 참조, 잘못된 카드 유형, 경계가 다른 처리 명령을 거절한다. 참조 삭제는 관련 카드의 버전과 상태를 트랜잭션 안에서 함께 갱신하되 업무 규칙과 사례는 보존한다.
 
 MCP의 `get_aggregate_design`은 읽기 도구이며 `patch_aggregate_design`은 편집 도구다. stdio와 HTTP는 같은 도구·API 검증을 사용하고, 읽기 토큰은 새 수정 도구를 수동 활성화한 클라이언트에서도 쓸 수 없다. `ddd://aggregates/{id}` 리소스는 API를 통해 프로젝트 권한을 검사하며, `ddd://learning/{stage}`는 공개 학습 콘텐츠만 포함한다. 분석 프롬프트는 카드 내용을 지시문으로 실행하지 않고 합의와 실행 테스트를 자동으로 주장하지 않는다.
+
+## 컨텍스트별 구현 문서 계약
+
+`GET /api/projects/:id/documents`는 조회 권한으로 현재 보드의 문서 묶음을 반환한다. `contextId` 쿼리가 있으면 같은 프로젝트의 해당 context 카드와 소속 카드로 범위를 제한한다. 기록된 외부 연결은 표시할 수 있으며 참조한 외부 카드의 ID·revision은 `generatedFrom.references`로 추적한다. `path`는 생성 문서 목록의 정확한 경로로만 선택하며 실제 파일 시스템을 읽지 않는다. 다른 프로젝트의 컨텍스트와 존재하지 않는 문서 경로는 거절한다.
+
+응답은 `{schemaVersion: 1, projectId, contextId, generatedFrom: {project, cards, references}, files: [{path, title, mediaType, content}]}`다. 단일 `path` 조회는 `files`에 해당 파일 하나를 담는다. 프로젝트 권한·토큰 범위·만료·철회를 기존 계약과 동일하게 검사하며 조회 과정에서 카드와 revision을 변경하지 않는다.
+
+`GET /api/projects/:id/export?format=documents&contextId=...`는 같은 생성 결과를 UTF-8 ZIP 첨부 파일로 반환한다. 전체 프로젝트 묶음은 미분류 카드도 포함한다. 기존 `format=json|markdown`의 동작은 유지한다. 문서 경로는 컨텍스트의 안정적인 ID로 구성하며, 설명과 이름은 Markdown에 안전하게 출력한다.
+
+`data`의 추가 문자열 필드는 모두 최대 20,000자이며 카드 종류별로 허용한다.
+
+- term: `codeName`, `distinction`, `confusedWith`, `source`, `unresolved`
+- context: `purpose`, `outOfScope`, `ownership`, `dependencies`, `integrationContract`, `unresolved`
+- aggregate: `stateTransitions`, `transactionBoundary`, `unresolved`
+- task: `acceptanceCriteria`, `testReferences`
+
+기존 data 필드와 기본값은 유지한다. 새 필드는 선택적이며 생략하면 강제로 데이터를 다시 쓰지 않는다. 전체 `data` 객체 교체와 합의 상태 변경의 기존 규칙을 적용한다.
+
+애그리게이트 규칙에 선택적 `scope`, `condition`, `violation`, `exceptions`, `unresolved`, `source` 문자열(각 2,000자)과 `status: hypothesis|proposed|agreed|retired`를 지원한다. 사례의 `type`은 `boundary`도 지원하며 선택적 `testReferences`는 2,000자다. ID 기반 부분 수정에서 생략한 필드는 보존하고 기존 크기·개수·참조·revision·권한 검사를 적용한다. 규칙 상태를 생략한 기존 설계는 문서에 애그리게이트 상태를 따른다고 명시한다. 부분 수정에서 합의된 규칙의 내용을 바꾸면서 규칙 상태를 생략하면 제안으로 돌아간다. 폐기된 규칙은 기록으로 보존하되 활성 규칙의 사례 누락 점검에서 제외한다.
+
+MCP `get_domain_documents`와 프로젝트/컨텍스트 문서 리소스는 이 조회 API를 사용한다. `ddd://guides/domain-documents`와 학습 리소스는 공개 가이드만 제공한다. 빈 정책은 미작성, 미결정 사항은 원문으로 보존하며 예시를 실제 프로젝트 정책으로 생성하지 않는다. 생성 문서는 테스트 실행 결과나 확정된 ADR을 주장하지 않는다.

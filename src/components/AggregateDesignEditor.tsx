@@ -1,3 +1,4 @@
+import { ruleFields } from '../../shared/documentation-fields.mjs';
 import { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import type {
@@ -36,7 +37,17 @@ export default function AggregateDesignEditor({
     onChange({
       ...design,
       rules: design.rules.map((rule) =>
-        rule.id === ruleId ? { ...rule, ...change } : rule,
+        rule.id === ruleId
+          ? {
+              ...rule,
+              ...change,
+              status: Object.hasOwn(change, 'status')
+                ? change.status
+                : rule.status === 'agreed'
+                  ? 'proposed'
+                  : rule.status,
+            }
+          : rule,
       ),
     });
   }
@@ -58,8 +69,8 @@ export default function AggregateDesignEditor({
     >
       <h3>명령·규칙·검증 사례</h3>
       <p className="field-help">
-        루트를 통해 처리할 명령을 연결하고, 각 규칙을 정상·거절·동시성 사례로
-        검토하세요. 사례 작성은 테스트 실행 결과가 아닙니다.
+        루트를 통해 처리할 명령을 연결하고, 각 규칙을 정상·거절·경계값·동시성
+        사례로 검토하세요. 사례 작성은 테스트 실행 결과가 아닙니다.
       </p>
       <fieldset className="aggregate-command-picker">
         <legend>처리하는 명령</legend>
@@ -89,6 +100,10 @@ export default function AggregateDesignEditor({
                       commandIds: rule.commandIds.filter((value) =>
                         commandIds.includes(value),
                       ),
+                      ...(rule.status === 'agreed' &&
+                      rule.commandIds.some((id) => !commandIds.includes(id))
+                        ? { status: 'proposed' as const }
+                        : {}),
                     })),
                   });
                 }}
@@ -124,6 +139,9 @@ export default function AggregateDesignEditor({
                     rules: design.rules.map((r) => ({
                       ...r,
                       commandIds: r.commandIds.filter((id) => id !== value),
+                      ...(r.status === 'agreed' && r.commandIds.includes(value)
+                        ? { status: 'proposed' as const }
+                        : {}),
                     })),
                   })
                 }
@@ -149,6 +167,47 @@ export default function AggregateDesignEditor({
               }
             />
           </label>
+          <p className="field-help">규칙 ID: {rule.id}</p>
+          <details className="documentation-fields">
+            <summary>규칙의 적용 조건·예외·근거</summary>
+            <label>
+              규칙 상태
+              <select
+                aria-label={`규칙 ${i + 1} 상태`}
+                value={rule.status || ''}
+                onChange={(e) =>
+                  ruleChange(rule.id, {
+                    status: (e.target.value ||
+                      undefined) as AggregateRule['status'],
+                  })
+                }
+              >
+                <option value="">애그리게이트 상태를 따름</option>
+                <option value="hypothesis">가설</option>
+                <option value="proposed">제안</option>
+                <option value="agreed">합의</option>
+                <option value="retired">폐기</option>
+              </select>
+            </label>
+            {ruleFields.map((field) => (
+              <div className="documentation-field" key={field.key}>
+                <label>
+                  {field.label}
+                  <textarea
+                    aria-label={`규칙 ${i + 1} ${field.label}`}
+                    rows={2}
+                    maxLength={2000}
+                    value={rule[field.key] || ''}
+                    onChange={(e) =>
+                      ruleChange(rule.id, { [field.key]: e.target.value })
+                    }
+                  />
+                </label>
+                <p className="field-help">{field.help}</p>
+                <p className="field-example">가상 정책 예: {field.example}</p>
+              </div>
+            ))}
+          </details>
           <fieldset className="aggregate-command-picker">
             <legend>이 규칙을 보장하는 명령</legend>
             {selected.map((command) => (
@@ -204,6 +263,7 @@ export default function AggregateDesignEditor({
                 >
                   <option value="normal">정상</option>
                   <option value="rejection">거절·실패</option>
+                  <option value="boundary">경계값</option>
                   <option value="concurrency">동시성·중복 요청</option>
                 </select>
               </label>
@@ -218,6 +278,13 @@ export default function AggregateDesignEditor({
                     aria-label={`규칙 ${i + 1} 사례 ${j + 1} ${key}`}
                     rows={2}
                     maxLength={2000}
+                    placeholder={
+                      key === 'given'
+                        ? '예: 계획 P-100은 CONFIRMED이며 수량은 100이다.'
+                        : key === 'when'
+                          ? '예: 수량을 120으로 직접 변경한다.'
+                          : '예: 요청을 거절하고 수량 100과 CONFIRMED 상태를 유지한다.'
+                    }
                     value={example[key]}
                     onChange={(event) =>
                       exampleChange(rule, example.id, {
@@ -227,6 +294,24 @@ export default function AggregateDesignEditor({
                   />
                 </label>
               ))}
+              <label>
+                관련 테스트 위치
+                <textarea
+                  aria-label={`규칙 ${i + 1} 사례 ${j + 1} 관련 테스트 위치`}
+                  rows={2}
+                  maxLength={2000}
+                  value={example.testReferences || ''}
+                  onChange={(e) =>
+                    exampleChange(rule, example.id, {
+                      testReferences: e.target.value,
+                    })
+                  }
+                />
+              </label>
+              <p className="field-help">
+                실제 존재하는 테스트 경로·이름을 기록하세요. 작성된 사례와
+                테스트 위치는 실행 성공을 뜻하지 않습니다.
+              </p>
               <button
                 type="button"
                 className="button small"
@@ -328,6 +413,7 @@ export default function AggregateDesignEditor({
               aria-label={`외부 참조 이유: ${cards.find((c) => c.id === ref.aggregateId)?.title || ref.aggregateId}`}
               rows={2}
               maxLength={2000}
+              placeholder="예: 환불을 요청하기 위해 결제를 참조한다. orderId와 paymentId를 전달한다."
               value={ref.reason}
               onChange={(event) =>
                 onChange({

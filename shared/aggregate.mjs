@@ -1,3 +1,4 @@
+import { ruleFields } from './documentation-fields.mjs';
 import { z } from 'zod';
 
 const id = z.string().min(1).max(100);
@@ -6,16 +7,21 @@ export const exampleSchema = z
   .object({
     id,
     title: z.string().max(200).default(''),
-    type: z.enum(['normal', 'rejection', 'concurrency']).default('normal'),
+    type: z
+      .enum(['normal', 'rejection', 'boundary', 'concurrency'])
+      .default('normal'),
     given: text.default(''),
     when: text.default(''),
     then: text.default(''),
+    testReferences: text.optional(),
   })
   .strict();
 export const ruleSchema = z
   .object({
     id,
     statement: text.default(''),
+    status: z.enum(['hypothesis', 'proposed', 'agreed', 'retired']).optional(),
+    ...Object.fromEntries(ruleFields.map((f) => [f.key, text.optional()])),
     commandIds: z.array(id).max(100).default([]),
     examples: z.array(exampleSchema).max(20).default([]),
   })
@@ -35,10 +41,11 @@ const examplePatch = z
   .object({
     id,
     title: z.string().max(200).optional(),
-    type: z.enum(['normal', 'rejection', 'concurrency']).optional(),
+    type: z.enum(['normal', 'rejection', 'boundary', 'concurrency']).optional(),
     given: text.optional(),
     when: text.optional(),
     then: text.optional(),
+    testReferences: text.optional(),
   })
   .strict();
 export const aggregatePatchSchema = z
@@ -55,6 +62,12 @@ export const aggregatePatchSchema = z
           .object({
             id,
             statement: text.optional(),
+            status: z
+              .enum(['hypothesis', 'proposed', 'agreed', 'retired'])
+              .optional(),
+            ...Object.fromEntries(
+              ruleFields.map((f) => [f.key, text.optional()]),
+            ),
             commandIds: z.array(id).max(100).optional(),
             upsertExamples: z.array(examplePatch).max(20).optional(),
             removeExampleIds: z.array(id).max(20).optional(),
@@ -197,6 +210,19 @@ export function patchAggregateDesign(current, raw) {
           ...values,
         }),
       );
+      if (
+        existing?.status === 'agreed' &&
+        fields.status === undefined &&
+        [
+          'statement',
+          'commandIds',
+          'examples',
+          ...ruleFields.map((f) => f.key),
+        ].some(
+          (key) => JSON.stringify(rule[key]) !== JSON.stringify(existing[key]),
+        )
+      )
+        rule.status = 'proposed';
       return rule;
     },
   );
@@ -210,6 +236,9 @@ export function removeAggregateReference(card, removedId) {
     rules: design.rules.map((r) => ({
       ...r,
       commandIds: r.commandIds.filter((id) => id !== removedId),
+      ...(r.status === 'agreed' && r.commandIds.includes(removedId)
+        ? { status: 'proposed' }
+        : {}),
     })),
     externalReferences: design.externalReferences.filter(
       (r) => r.aggregateId !== removedId,
@@ -225,11 +254,12 @@ export function aggregateReview(card, cards) {
   const byId = new Map(cards.map((c) => [c.id, c]));
   const add = (code, message) =>
     issues.push({ cardId: card.id, stage: card.stage, code, message });
+  const activeRules = design.rules.filter((rule) => rule.status !== 'retired');
   if (!card.data.root?.trim())
     add('aggregate-root', '애그리게이트 루트를 정해 주세요.');
   if (
     !card.data.invariants?.trim() &&
-    !design.rules.some((rule) => rule.statement.trim())
+    !activeRules.some((rule) => rule.statement.trim())
   )
     add(
       'aggregate-invariants',
@@ -266,12 +296,12 @@ export function aggregateReview(card, cards) {
         '명령을 처리하는 애그리게이트의 책임이 중복되어 있습니다.',
       );
   }
-  if (!design.rules.length)
+  if (!activeRules.length)
     add(
       'aggregate-structured-rules',
       '기존 규칙 설명을 보존하면서 규칙별 명령과 검증 사례를 구체화해 주세요.',
     );
-  for (const rule of design.rules) {
+  for (const rule of activeRules) {
     const label = rule.statement.trim() || '이름 없는 규칙';
     if (!rule.statement.trim())
       add('aggregate-rule-statement', '업무 불변식의 내용을 적어 주세요.');

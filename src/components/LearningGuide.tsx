@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ArrowLeft, ArrowRight, BookOpen, Check } from 'lucide-react';
 import type { Stage } from '../types';
 import { steps } from '../workflow';
-import { lessons, references } from '../learning';
+import { lessons, references, documentationGuide } from '../learning';
 import Modal from './Modal';
 
 export default function LearningGuide({
@@ -98,6 +98,60 @@ export default function LearningGuide({
             <h4>주문 도메인으로 이해하기</h4>
             <p>{lesson.example}</p>
           </section>
+          {lesson.fieldExamples && (
+            <details className="learning-section">
+              <summary>애그리게이트 항목별 작성 예시</summary>
+              <p className="learning-note">
+                주문과 생산계획 예시는 학습용 가정입니다. 실제 정책으로
+                저장하거나 합의하기 전에 업무 담당자에게 확인하세요.
+              </p>
+              {lesson.fieldExamples.map((f) => (
+                <div className="learning-concept" key={f.label}>
+                  <h5>{f.label}</h5>
+                  <p>{f.help}</p>
+                  <p>예: {f.example}</p>
+                </div>
+              ))}
+            </details>
+          )}
+          <details className="learning-section">
+            <summary>AI 구현을 위한 문서 작성과 운영</summary>
+            <p>{documentationGuide.goal}</p>
+            <p className="learning-note">{documentationGuide.principle}</p>
+            <h5>추천 문서</h5>
+            <ul>
+              {documentationGuide.files.map((f) => (
+                <li key={f.path}>
+                  <code>{f.path}</code> — {f.purpose}
+                </li>
+              ))}
+            </ul>
+            <h5>반복해서 검토하기</h5>
+            <ol>
+              {documentationGuide.workflow.map((text) => (
+                <li key={text}>{text}</li>
+              ))}
+            </ol>
+            <h5>가상의 생산계획 규칙과 사례</h5>
+            <p className="learning-note">{documentationGuide.example.note}</p>
+            <p>
+              {documentationGuide.example.ruleId} · 제안:{' '}
+              {documentationGuide.example.statement}
+            </p>
+            <p>조건: {documentationGuide.example.condition}</p>
+            <p>위반 결과: {documentationGuide.example.violation}</p>
+            <p>허용 대안: {documentationGuide.example.exceptions}</p>
+            <p>미결정: {documentationGuide.example.unresolved}</p>
+            <p>Given: {documentationGuide.example.scenario.given}</p>
+            <p>When: {documentationGuide.example.scenario.when}</p>
+            <p>Then: {documentationGuide.example.scenario.then}</p>
+            <h5>문서 품질을 확인할 질문</h5>
+            <ul>
+              {documentationGuide.review.map((text) => (
+                <li key={text}>{text}</li>
+              ))}
+            </ul>
+          </details>
           <section className="learning-section">
             <h4>보드에서 실습하기</h4>
             <ol>

@@ -1,3 +1,8 @@
+import {
+  documentationFields,
+  ruleFields,
+} from '../../shared/documentation-fields.mjs';
+import { statuses } from '../../shared/design.mjs';
 import { ArrowRight, Blocks } from 'lucide-react';
 import type { Card } from '../types';
 import { buildAggregateDesign } from '../../shared/aggregate.mjs';
@@ -5,6 +10,7 @@ import { buildAggregateDesign } from '../../shared/aggregate.mjs';
 const exampleTypes = {
   normal: '정상',
   rejection: '거절·실패',
+  boundary: '경계값',
   concurrency: '동시성·중복 요청',
 };
 export default function AggregateOverview({
@@ -99,6 +105,14 @@ export default function AggregateOverview({
             처리 명령을 연결해 변경 행동을 구체화하세요.
           </p>
         )}
+        {documentationFields
+          .aggregate!.filter((f) => card.data[f.key])
+          .map((f) => (
+            <div key={f.key}>
+              <h4>{f.label}</h4>
+              <p>{String(card.data[f.key])}</p>
+            </div>
+          ))}
         <h4>업무 규칙과 검증 사례</h4>
         {model.design.rules.map((rule, i) => (
           <details className="aggregate-rule-summary" key={rule.id}>
@@ -114,6 +128,20 @@ export default function AggregateOverview({
                 )
                 .join(', ') || '아직 연결하지 않았어요.'}
             </p>
+            <p className="field-help">
+              규칙 ID: {rule.id} · 상태:{' '}
+              {rule.status === 'retired'
+                ? '폐기'
+                : statuses[rule.status || card.status]}
+            </p>
+            {ruleFields
+              .filter((f) => rule[f.key])
+              .map((f) => (
+                <div key={f.key}>
+                  <strong>{f.label}</strong>
+                  <p>{rule[f.key]}</p>
+                </div>
+              ))}
             {rule.examples.map((example) => (
               <section className="aggregate-case" key={example.id}>
                 <h5>
@@ -127,6 +155,12 @@ export default function AggregateOverview({
                   <dd>{example.when || '—'}</dd>
                   <dt>Then</dt>
                   <dd>{example.then || '—'}</dd>
+                  {example.testReferences && (
+                    <>
+                      <dt>관련 테스트</dt>
+                      <dd>{example.testReferences} · 실행 여부 별도 확인</dd>
+                    </>
+                  )}
                 </dl>
               </section>
             ))}

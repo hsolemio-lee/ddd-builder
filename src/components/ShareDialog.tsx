@@ -1,3 +1,4 @@
+import DocumentExport from './DocumentExport';
 import { useEffect, useState } from 'react';
 import {
   Copy,
@@ -11,7 +12,7 @@ import {
 } from 'lucide-react';
 import Modal from './Modal';
 import { api } from '../api';
-import type { Project } from '../types';
+import type { Card, Project } from '../types';
 
 interface Info {
   urls: string[];
@@ -34,10 +35,12 @@ async function copy(text: string) {
 export default function ShareDialog({
   mode,
   project,
+  cards = [],
   onClose,
 }: {
   mode: 'share' | 'mcp' | 'export';
   project?: Project;
+  cards?: Card[];
   onClose: () => void;
 }) {
   const [info, setInfo] = useState<Info>();
@@ -82,7 +85,7 @@ export default function ShareDialog({
       )
     : '';
   const prompt = project
-    ? `DDD Builder의 프로젝트 ${project.id} (${project.name})를 읽고 이벤트 스토밍 결과를 분석해줘. 중복 이벤트와 빠진 명령·행위자·정책을 확인하고, 바운디드 컨텍스트와 애그리게이트 경계를 제안해줘. 사실과 추론을 구분하고, 보드에 수정하기 전에 제안 내용을 보여줘.`
+    ? `DDD Builder의 프로젝트 ${project.id} (${project.name})의 get_domain_documents로 docs/domain/index.md를 읽고 관련 컨텍스트의 용어·규칙·사례와 이벤트 스토밍 결과를 분석해줘. 중복 이벤트와 빠진 명령·행위자·정책을 확인하고, 바운디드 컨텍스트와 애그리게이트 경계를 제안해줘. 사실과 추론을 구분하고, 보드에 수정하기 전에 제안 내용을 보여줘.`
     : '';
   return (
     <Modal
@@ -152,8 +155,9 @@ export default function ShareDialog({
             </div>
             <h3>설계를 다음 작업으로 가져가요.</h3>
             <p className="muted">
-              {project.name}의 모든 단계와 카드가 포함됩니다.
+              {project.name}의 문서 범위와 내보내기 형식을 선택하세요.
             </p>
+            <DocumentExport project={project} cards={cards} />
             <a
               className="export-option"
               href={`/api/projects/${project.id}/export?format=markdown`}
@@ -161,8 +165,8 @@ export default function ShareDialog({
             >
               <FileText size={24} />
               <div>
-                <strong>Markdown 문서</strong>
-                <p>팀에 공유하거나 개발 문서로 활용해요.</p>
+                <strong>워크숍 기록 Markdown</strong>
+                <p>단계별로 모든 카드를 나열한 기록입니다.</p>
               </div>
               <ArrowUpRight size={18} />
             </a>
@@ -220,9 +224,7 @@ export default function ShareDialog({
                 <span>3</span>
                 <div>
                   <strong>프로젝트 분석을 요청하세요</strong>
-                  <p>
-                    연결된 AI는 보드에서 최신 카드와 컨텍스트를 직접 읽어요.
-                  </p>
+                  <p>연결된 AI는 최신 보드와 컨텍스트별 구현 문서를 읽어요.</p>
                 </div>
               </li>
             </ol>

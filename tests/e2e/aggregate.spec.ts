@@ -116,7 +116,7 @@ test('aggregate behavior, rules and examples persist and remain editable after a
     .fill('승인 결과를 기다리고 중복 결과를 한 번 처리한다');
   await page.getByLabel('검토 상태', { exact: true }).selectOption('agreed');
   await page
-    .getByLabel('검토 근거')
+    .getByLabel('검토 근거', { exact: true })
     .fill('주문 담당자와 정상·거절 사례를 검토했다');
   await page.getByRole('button', { name: '카드 저장', exact: true }).click();
   await expect(page.getByRole('dialog')).not.toBeVisible();

@@ -1,3 +1,4 @@
+import { documentationFields } from '../../shared/documentation-fields.mjs';
 import type { Card } from '../types';
 import { kinds } from '../workflow';
 import { statuses, scenarios, linkKinds } from '../../shared/design.mjs';
@@ -6,6 +7,11 @@ import ContextRelationships from './ContextRelationships';
 import AggregateOverview from './AggregateOverview';
 
 const labels: Record<string, string> = {
+  ...Object.fromEntries(
+    Object.values(documentationFields)
+      .flat()
+      .map((f) => [f.key, f.label]),
+  ),
   relationships: '컨텍스트 관계',
   relationshipFormat: '관계 표시 형식',
   root: '루트 엔티티',
@@ -52,6 +58,13 @@ export default function CardDetails({
               </p>
             ))}
           </div>
+        )}
+        {card.contextId && (
+          <p>
+            컨텍스트:{' '}
+            {cards.find((c) => c.id === card.contextId)?.title ||
+              card.contextId}
+          </p>
         )}
         <p>{card.description || '작성된 설명이 없습니다.'}</p>
         {card.kind === 'context' && (

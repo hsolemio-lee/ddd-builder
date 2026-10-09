@@ -88,7 +88,7 @@ test('workflow, project creation, task completion, export and small screen', asy
     .getByRole('button', { name: '결과 내보내기', exact: true })
     .click();
   const download = page.waitForEvent('download');
-  await page.getByRole('link', { name: 'Markdown 문서' }).click();
+  await page.getByRole('link', { name: '워크숍 기록 Markdown' }).click();
   expect((await download).suggestedFilename()).toMatch(/\.md$/);
   await page.getByRole('button', { name: '닫기', exact: true }).click();
   await page.setViewportSize({ width: 390, height: 844 });

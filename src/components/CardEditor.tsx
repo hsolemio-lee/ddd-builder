@@ -1,4 +1,5 @@
-import { useState, type FormEvent } from 'react';
+import DocumentationFields from './DocumentationFields';
+import { useRef, useState, type FormEvent } from 'react';
 import { Check, Trash2, RefreshCw, AlertCircle } from 'lucide-react';
 import type { Card, CardDraft, Kind, Stage, User } from '../types';
 import { kinds, steps } from '../workflow';
@@ -53,6 +54,11 @@ export default function CardEditor({
             ) + 1,
         },
   );
+  const draftDataByKind = useRef<Partial<Record<Kind, CardDraft['data']>>>({});
+  function changeKind(next: Kind) {
+    draftDataByKind.current[draft.kind] = draft.data;
+    changeDraft({ kind: next, data: draftDataByKind.current[next] || {} });
+  }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [conflict, setConflict] = useState<Card>();
@@ -82,6 +88,7 @@ export default function CardEditor({
       );
       return;
     }
+    draftDataByKind.current = {};
     setBase(current);
     setDraft({ ...current, data: { ...current.data } });
     setConflict(undefined);
@@ -168,9 +175,7 @@ export default function CardEditor({
                 <select
                   aria-label="카드 유형"
                   value={draft.kind}
-                  onChange={(e) =>
-                    changeDraft({ kind: e.target.value as Kind })
-                  }
+                  onChange={(e) => changeKind(e.target.value as Kind)}
                 >
                   {steps
                     .find((s) => s.id === draft.stage)!
@@ -209,7 +214,8 @@ export default function CardEditor({
                 onChange={(e) => changeDraft({ description: e.target.value })}
               />
             </label>
-            {['events', 'aggregates', 'tasks'].includes(draft.stage) && (
+            {(['events', 'aggregates', 'tasks'].includes(draft.stage) ||
+              draft.kind === 'term') && (
               <label>
                 소속 컨텍스트
                 <select
@@ -285,6 +291,7 @@ export default function CardEditor({
                 )}
               </section>
             )}
+            <DocumentationFields draft={draft} onChange={dataField} />
             {draft.stage === 'aggregates' && (
               <>
                 <label>

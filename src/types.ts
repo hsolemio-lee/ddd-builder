@@ -37,14 +37,22 @@ export interface CardLink {
 export interface AggregateExample {
   id: string;
   title: string;
-  type: 'normal' | 'rejection' | 'concurrency';
+  type: 'normal' | 'rejection' | 'boundary' | 'concurrency';
   given: string;
   when: string;
   then: string;
+  testReferences?: string;
 }
 export interface AggregateRule {
   id: string;
   statement: string;
+  status?: AgreementStatus | 'retired';
+  scope?: string;
+  condition?: string;
+  violation?: string;
+  exceptions?: string;
+  unresolved?: string;
+  source?: string;
   commandIds: string[];
   examples: AggregateExample[];
 }

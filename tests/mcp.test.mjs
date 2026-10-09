@@ -39,6 +39,7 @@ test('MCP lists projects and exposes one project as tools, resources and an anal
   const names = (await client.listTools()).tools.map((tool) => tool.name);
   assert.deepEqual(names.sort(), [
     'get_aggregate_design',
+    'get_domain_documents',
     'get_project_board',
     'list_projects',
     'review_design',
@@ -312,4 +313,116 @@ test('MCP reads aggregate behavior and safely patches one rule, resources and le
     prompt.messages[0].content.text.includes('사례는 실행한 테스트가 아닙니다'),
   );
   assert.ok(prompt.messages[0].content.text.includes('수정한 규칙'));
+});
+
+test('MCP domain documents share API projection, selectable files, context scope and learning examples', async (t) => {
+  const { client, url } = await setup(t, { readOnly: false });
+  const projectId = value(
+    await client.callTool({ name: 'list_projects', arguments: {} }),
+  )[0].id;
+  const ctx = value(
+    await client.callTool({
+      name: 'create_card',
+      arguments: {
+        projectId,
+        stage: 'contexts',
+        kind: 'context',
+        title: '문서 컨텍스트',
+        data: {
+          purpose: '계획 수립',
+          outOfScope: '실행',
+          ownership: '계획 수량',
+          integrationContract: '계획확정됨 v1',
+        },
+      },
+    }),
+  );
+  value(
+    await client.callTool({
+      name: 'create_card',
+      arguments: {
+        projectId,
+        stage: 'discovery',
+        kind: 'term',
+        title: '계획',
+        contextId: ctx.id,
+        description: '예정 수량',
+        data: {
+          codeName: 'ProductionPlan',
+          distinction: '실적과 구분',
+          confusedWith: '실적',
+          source: '운영 지침',
+        },
+      },
+    }),
+  );
+  const bundle = value(
+    await client.callTool({
+      name: 'get_domain_documents',
+      arguments: { projectId, contextId: ctx.id },
+    }),
+  );
+  const resource = await client.readResource({
+    uri: `ddd://projects/${projectId}/contexts/${ctx.id}/documents`,
+  });
+  assert.deepEqual(JSON.parse(resource.contents[0].text), bundle);
+  const projectResource = await client.readResource({
+    uri: `ddd://projects/${projectId}/documents`,
+  });
+  assert.equal(
+    JSON.parse(projectResource.contents[0].text).projectId,
+    projectId,
+  );
+  const selected = value(
+    await client.callTool({
+      name: 'get_domain_documents',
+      arguments: {
+        projectId,
+        contextId: ctx.id,
+        path: `docs/domain/context-${ctx.id}/glossary.md`,
+      },
+    }),
+  );
+  assert.equal(selected.files.length, 1);
+  assert.match(selected.files[0].content, /ProductionPlan/);
+  const login = await fetch(url + '/api/session', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ code: 'mcp-test-code', name: '문서 비교' }),
+  });
+  const apiBundle = await (
+    await fetch(
+      `${url}/api/projects/${projectId}/documents?contextId=${ctx.id}`,
+      { headers: { cookie: login.headers.get('set-cookie').split(';')[0] } },
+    )
+  ).json();
+  assert.deepEqual(apiBundle, bundle);
+  const bad = await client.callTool({
+    name: 'get_domain_documents',
+    arguments: { projectId, path: '../secrets' },
+  });
+  assert.equal(bad.isError, true);
+  assert.equal(JSON.parse(bad.content[0].text).status, 404);
+  const learning = JSON.parse(
+    (await client.readResource({ uri: 'ddd://learning/aggregates' }))
+      .contents[0].text,
+  );
+  assert.ok(
+    learning.lesson.fieldExamples.some((f) => f.label === '트랜잭션 경계'),
+  );
+  assert.ok(learning.documentationGuide.example.ruleId === 'PLAN-001');
+  const guide = await client.readResource({
+    uri: 'ddd://guides/domain-documents',
+  });
+  assert.deepEqual(
+    JSON.parse(guide.contents[0].text),
+    learning.documentationGuide,
+  );
+  const listed = await client.listResources();
+  assert.ok(
+    listed.resources.some(
+      (r) =>
+        r.uri === `ddd://projects/${projectId}/contexts/${ctx.id}/documents`,
+    ),
+  );
 });
