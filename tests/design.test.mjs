@@ -398,3 +398,126 @@ test('context regions preserve ownership, empty boundaries and directional cross
   assert.equal(layout.edges.length, 1);
   assert.equal(layoutContextMap([], []).edges.length, 0);
 });
+
+test('context layout adapts to width and routes relationships around ownership regions', () => {
+  const groups = Array.from({ length: 6 }, (_, i) => ({
+    context: { id: `c${i}` },
+    members: [],
+  }));
+  const lane = { flows: [], declared: true };
+  const connections = [
+    { id: 'near', source: 'c0', target: 'c1', forward: lane, reverse: lane },
+    { id: 'far', source: 'c0', target: 'c5', forward: lane, reverse: lane },
+    { id: 'middle', source: 'c1', target: 'c4', forward: lane, reverse: lane },
+  ];
+  const snapshot = structuredClone({ groups, connections });
+  const wide = layoutContextMap(groups, connections, { width: 1600 });
+  const narrow = layoutContextMap(groups, connections, { width: 700 });
+  assert.ok(wide.width > narrow.width);
+  assert.ok(wide.height < narrow.height);
+  function verify(layout) {
+    assert.equal(layout.edges.length, connections.length);
+    for (const edge of layout.edges) {
+      const numbers = edge.path.match(/-?\d+(?:\.\d+)?/g).map(Number);
+      const points = Array.from({ length: numbers.length / 2 }, (_, i) => ({
+        x: numbers[i * 2],
+        y: numbers[i * 2 + 1],
+      }));
+      assert.ok(
+        points.every(
+          (p) =>
+            p.x >= 0 && p.y >= 0 && p.x <= layout.width && p.y <= layout.height,
+        ),
+      );
+      for (let i = 1; i < points.length; i++) {
+        const a = points[i - 1],
+          b = points[i];
+        assert.ok(a.x === b.x || a.y === b.y);
+        for (const node of layout.nodes) {
+          const intersects =
+            a.x === b.x
+              ? a.x > node.x &&
+                a.x < node.x + 320 &&
+                Math.max(a.y, b.y) > node.y &&
+                Math.min(a.y, b.y) < node.y + 248
+              : a.y > node.y &&
+                a.y < node.y + 248 &&
+                Math.max(a.x, b.x) > node.x &&
+                Math.min(a.x, b.x) < node.x + 320;
+          assert.equal(intersects, false, `${edge.id} crosses ${node.id}`);
+        }
+      }
+    }
+  }
+  verify(wide);
+  verify(narrow);
+  const moved = layoutContextMap(groups, connections, {
+    width: 1600,
+    positions: { c0: { x: 1480, y: 900 } },
+  });
+  assert.deepEqual(
+    moved.nodes.find((n) => n.id === 'c0'),
+    { id: 'c0', x: 1480, y: 900 },
+  );
+  verify(moved);
+  assert.deepEqual({ groups, connections }, snapshot);
+});
+
+test('flow layout aligns separate stories and routes return edges outside the cards', () => {
+  const card = (id, position, target) => ({
+    id,
+    position,
+    stage: 'events',
+    links: target ? [{ kind: 'flow', targetId: target }] : [],
+  });
+  const cards = [
+    card('a', 0, 'b'),
+    card('d', 1),
+    card('c', 2, 'd'),
+    card('b', 3, 'a'),
+  ];
+  const snapshot = structuredClone(cards);
+  const graph = layoutFlow(cards, { direction: 'horizontal' });
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  assert.equal(byId.get('a').y, byId.get('b').y);
+  assert.equal(byId.get('c').y, byId.get('d').y);
+  assert.notEqual(byId.get('a').y, byId.get('c').y);
+  assert.ok(byId.get('a').x < byId.get('b').x);
+  assert.ok(byId.get('c').x < byId.get('d').x);
+  const feedback = graph.edges.find((e) => e.feedback);
+  assert.ok(feedback.path.includes('L'));
+  assert.ok(
+    graph.edges.every(
+      (e) => !e.path.includes('NaN') && !e.path.includes('undefined'),
+    ),
+  );
+  assert.deepEqual(cards, snapshot);
+});
+
+test('flow direction can change without losing branches or return edges', () => {
+  const cards = Array.from({ length: 6 }, (_, i) => ({
+    id: `n${i}`,
+    stage: 'events',
+    position: i,
+    links: [{ kind: 'flow', targetId: `n${(i + 1) % 6}` }],
+  }));
+  const horizontal = layoutFlow(cards, { direction: 'horizontal' });
+  const vertical = layoutFlow(cards, { direction: 'vertical' });
+  assert.equal(horizontal.direction, 'horizontal');
+  assert.equal(vertical.direction, 'vertical');
+  assert.ok(horizontal.width > vertical.width);
+  assert.ok(horizontal.height < vertical.height);
+  assert.deepEqual(
+    horizontal.edges.map(({ source, target, feedback }) => ({
+      source,
+      target,
+      feedback,
+    })),
+    vertical.edges.map(({ source, target, feedback }) => ({
+      source,
+      target,
+      feedback,
+    })),
+  );
+  assert.equal(layoutFlow(cards, { width: 390 }).direction, 'vertical');
+});

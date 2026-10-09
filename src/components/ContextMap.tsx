@@ -1,9 +1,17 @@
-import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from 'react';
 import {
   ArrowRight,
   ArrowLeft,
   ArrowLeftRight,
   Layers3,
+  Move,
   Plus,
   X,
 } from 'lucide-react';
@@ -16,6 +24,7 @@ import {
 import { kinds } from '../workflow';
 import { statuses } from '../../shared/design.mjs';
 import ContextRelationships from './ContextRelationships';
+import GraphViewport from './GraphViewport';
 
 const accents = [
   '#4e7860',
@@ -53,11 +62,52 @@ export default function ContextMap({
   onAdd: () => void;
 }) {
   const marker = useId().replace(/[^a-zA-Z0-9_-]/g, '');
+  const [expanded, setExpanded] = useState(false);
+  const [availableWidth, setAvailableWidth] = useState(1100);
+  const [positions, setPositions] = useState<
+    Record<string, { x: number; y: number }>
+  >({});
+  const drag = useRef<
+    | { x: number; y: number; left: number; top: number; scale: number }
+    | undefined
+  >(undefined);
   const [selection, setSelection] = useState<string>();
   const [pairId, setPairId] = useState<string>();
   const detail = useRef<HTMLElement>(null);
-  const map = buildContextMap(contexts, members),
-    layout = layoutContextMap(map.groups, map.connections);
+  const map = useMemo(
+    () => buildContextMap(contexts, members),
+    [contexts, members],
+  );
+  const layout = useMemo(
+    () =>
+      layoutContextMap(map.groups, map.connections, {
+        width: availableWidth,
+        positions,
+      }),
+    [map, availableWidth, positions],
+  );
+  function moveRegion(id: string, x: number, y: number) {
+    x = Math.max(64, x);
+    y = Math.max(64, y);
+    if (
+      layout.nodes.some(
+        (node) =>
+          node.id !== id &&
+          x < node.x + 384 &&
+          x + 384 > node.x &&
+          y < node.y + 312 &&
+          y + 312 > node.y,
+      )
+    )
+      return;
+    setPositions((previous) => ({
+      ...Object.fromEntries(
+        layout.nodes.map((node) => [node.id, { x: node.x, y: node.y }]),
+      ),
+      ...previous,
+      [id]: { x, y },
+    }));
+  }
   const selected =
     selection === 'unassigned'
       ? { context: undefined, members: map.unassigned }
@@ -80,10 +130,12 @@ export default function ContextMap({
       });
   }, [selection, pairId]);
   function chooseContext(id: string) {
+    setExpanded(false);
     setSelection(id);
     setPairId(undefined);
   }
   function choosePair(id: string) {
+    setExpanded(false);
     setPairId(id);
     setSelection(undefined);
   }
@@ -154,6 +206,15 @@ export default function ContextMap({
           점선 연결 · 선언한 관계
         </span>
       </div>
+      {contexts.length > 0 && (
+        <div className="map-layout-controls">
+          <p>
+            이동 손잡이를 드래그하거나 방향키로 영역을 배치하세요. 자동 배치로
+            돌아가면 화면 너비와 연결에 맞춰 정리해요. 수동 배치는 현재
+            보기에서만 유지돼요.
+          </p>
+        </div>
+      )}
       {contexts.length === 0 ? (
         <div className="map-empty">
           <Layers3 size={28} />
@@ -172,10 +233,18 @@ export default function ContextMap({
           </button>
         </div>
       ) : (
-        <div
-          className="context-map-scroll"
-          tabIndex={0}
-          aria-label="컨텍스트 경계 지도, 좁은 화면에서는 영역이 세로로 표시됩니다"
+        <GraphViewport
+          title="컨텍스트 경계 지도"
+          width={layout.width}
+          height={layout.height}
+          expanded={expanded}
+          onExpandedChange={setExpanded}
+          onAvailableWidth={setAvailableWidth}
+          tools={
+            <button className="button small" onClick={() => setPositions({})}>
+              자동 배치
+            </button>
+          }
         >
           <div
             className="context-map-canvas"
@@ -262,6 +331,75 @@ export default function ContextMap({
                 >
                   <header>
                     <div>
+                      <button
+                        className="boundary-move icon-button"
+                        data-graph-move
+                        aria-label={`영역 이동: ${group.context.title}`}
+                        title="드래그하거나 방향키로 이동"
+                        onPointerDown={(event) => {
+                          if (event.button !== 0) return;
+                          event.preventDefault();
+                          event.currentTarget.setPointerCapture(
+                            event.pointerId,
+                          );
+                          const scale =
+                            event.currentTarget
+                              .closest('.context-boundary')!
+                              .getBoundingClientRect().width / 320;
+                          drag.current = {
+                            x: event.clientX,
+                            y: event.clientY,
+                            left: node.x,
+                            top: node.y,
+                            scale,
+                          };
+                        }}
+                        onPointerMove={(event) => {
+                          if (!drag.current) return;
+                          moveRegion(
+                            group.context.id,
+                            drag.current.left +
+                              (event.clientX - drag.current.x) /
+                                drag.current.scale,
+                            drag.current.top +
+                              (event.clientY - drag.current.y) /
+                                drag.current.scale,
+                          );
+                        }}
+                        onPointerUp={(event) => {
+                          if (
+                            event.currentTarget.hasPointerCapture(
+                              event.pointerId,
+                            )
+                          )
+                            event.currentTarget.releasePointerCapture(
+                              event.pointerId,
+                            );
+                        }}
+                        onLostPointerCapture={() => {
+                          drag.current = undefined;
+                        }}
+                        onKeyDown={(event) => {
+                          const delta = event.shiftKey ? 8 : 24;
+                          const changes: Record<string, [number, number]> = {
+                            ArrowLeft: [-delta, 0],
+                            ArrowRight: [delta, 0],
+                            ArrowUp: [0, -delta],
+                            ArrowDown: [0, delta],
+                          };
+                          const change = changes[event.key];
+                          if (change) {
+                            event.preventDefault();
+                            moveRegion(
+                              group.context.id,
+                              node.x + change[0],
+                              node.y + change[1],
+                            );
+                          }
+                        }}
+                      >
+                        <Move size={15} />
+                      </button>
                       <span className="boundary-number">
                         BC {String(i + 1).padStart(2, '0')}
                       </span>
@@ -321,7 +459,7 @@ export default function ContextMap({
               );
             })}
           </div>
-        </div>
+        </GraphViewport>
       )}
       <div className="unassigned-boundary">
         <div>

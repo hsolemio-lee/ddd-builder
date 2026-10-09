@@ -25,6 +25,10 @@ export function buildContextMap(
 export function layoutContextMap(
   groups: ContextGroup[],
   connections: ContextConnection[],
+  options?: {
+    width?: number;
+    positions?: Record<string, { x: number; y: number }>;
+  },
 ): {
   nodes: { id: string; x: number; y: number }[];
   edges: (ContextConnection & {

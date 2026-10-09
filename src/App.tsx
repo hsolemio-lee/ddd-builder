@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import type { User, Workspace, Project, Stage, Card, Kind } from './types';
 import { api, ApiError } from './api';
-import { hints, kinds, steps } from './workflow';
+import { kinds, steps } from './workflow';
 import Login from './components/Login';
 import Board from './components/Board';
 import CardEditor from './components/CardEditor';
@@ -34,6 +34,7 @@ import SecurityDialog from './components/SecurityDialog';
 import FlowBoard from './components/FlowBoard';
 import DesignReview from './components/DesignReview';
 import ContextMap from './components/ContextMap';
+import LearningGuide from './components/LearningGuide';
 import { normalizeCard, statuses, scenarios } from '../shared/design.mjs';
 
 function normalizeWorkspace(value: Workspace): Workspace {
@@ -60,7 +61,7 @@ export default function App() {
   }>();
   const [projectForm, setProjectForm] = useState<{ project?: Project }>();
   const [dialog, setDialog] = useState<'share' | 'mcp' | 'export'>();
-  const [guide, setGuide] = useState(false);
+  const [guide, setGuide] = useState<Stage>();
   const [details, setDetails] = useState<Card>();
   const [securityOpen, setSecurityOpen] = useState(false);
   const [sidebar, setSidebar] = useState(false);
@@ -473,9 +474,15 @@ export default function App() {
             <ArrowRight size={14} />
           </span>
         </button>
-        <button className="guide-button" onClick={() => setGuide(true)}>
+        <button
+          className="guide-button"
+          onClick={() => {
+            setGuide(stage);
+            setSidebar(false);
+          }}
+        >
           <HelpCircle size={17} />
-          워크숍 사용 가이드
+          DDD 학습 가이드
           <ArrowUpMini />
         </button>
         {user.siteAdmin && (
@@ -640,6 +647,12 @@ export default function App() {
                   <strong>워크숍 팁</strong>
                   {step.tip}
                 </p>
+                <button
+                  className="button small learning-open"
+                  onClick={() => setGuide(stage)}
+                >
+                  <HelpCircle size={15} /> 이 단계 이론과 실습
+                </button>
               </div>
               <div className="board-toolbar">
                 <div className="board-view">
@@ -969,29 +982,14 @@ export default function App() {
         />
       )}
       {guide && (
-        <Modal title="워크숍 사용 가이드" onClose={() => setGuide(false)}>
-          <div className="guide-content">
-            <p className="muted">
-              한 단계씩 함께 이야기해 보세요. 순서를 엄격히 지킬 필요는 없어요.
-            </p>
-            {steps.map((s) => (
-              <section key={s.id}>
-                <h3>{s.title}</h3>
-                {hints[s.id].map((h) => (
-                  <p key={h}>
-                    <Check size={14} />
-                    {h}
-                  </p>
-                ))}
-              </section>
-            ))}
-            <div className="guide-bottom">
-              카드를 클릭하면 자세히 편집할 수 있어요. 위·아래 화살표로 순서를
-              바꾸고, 컨텍스트 단계에서 이벤트를 분류해 보세요. AI 연결
-              메뉴에서는 외부 AI에 분석을 맡길 수 있습니다.
-            </div>
-          </div>
-        </Modal>
+        <LearningGuide
+          initialStage={guide}
+          onClose={() => setGuide(undefined)}
+          onPractice={(target) => {
+            navigate(target);
+            setGuide(undefined);
+          }}
+        />
       )}
       {needsJoin && (
         <Modal title="워크숍에 다시 참여하기" closeDisabled onClose={() => {}}>

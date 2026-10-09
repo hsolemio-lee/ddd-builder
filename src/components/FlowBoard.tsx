@@ -1,4 +1,5 @@
-import { useId } from 'react';
+import { useId, useMemo, useState } from 'react';
+import GraphViewport from './GraphViewport';
 import type { Card } from '../types';
 import { layoutFlow } from '../../shared/flow.mjs';
 import { statuses } from '../../shared/design.mjs';
@@ -13,9 +14,16 @@ export default function FlowBoard({
   allCards: Card[];
   onOpen: (card: Card) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const marker = useId().replace(/:/g, '');
-  const graph = layoutFlow(cards);
-  const nodeById = new Map(graph.nodes.map((n) => [n.id, n]));
+  const [availableWidth, setAvailableWidth] = useState(1100);
+  const [direction, setDirection] = useState<
+    'auto' | 'horizontal' | 'vertical'
+  >('auto');
+  const graph = useMemo(
+    () => layoutFlow(cards, { width: availableWidth, direction }),
+    [cards, availableWidth, direction],
+  );
   const byId = new Map(cards.map((c) => [c.id, c]));
   const hiddenLinks = cards
     .flatMap((c) => c.links)
@@ -27,6 +35,9 @@ export default function FlowBoard({
       <p className="field-help">
         화살표는 출발 카드에서 연결 대상으로 향해요. 카드를 선택해 내용을
         확인하고 연결을 편집하세요. 점선은 반복 경로입니다.
+      </p>
+      <p className="field-help">
+        연결된 이야기를 함께 배치하고, 독립적인 흐름은 분리해요.
       </p>
       {hiddenLinks > 0 && (
         <p className="field-help">
@@ -43,10 +54,29 @@ export default function FlowBoard({
           </p>
         </div>
       ) : (
-        <div
-          className="flow-scroll"
-          tabIndex={0}
-          aria-label="설계 흐름 캔버스, 가로로 스크롤할 수 있습니다"
+        <GraphViewport
+          title="설계 흐름"
+          width={graph.width}
+          height={graph.height}
+          expanded={expanded}
+          onExpandedChange={setExpanded}
+          onAvailableWidth={setAvailableWidth}
+          tools={
+            <label className="graph-direction">
+              배치 방향
+              <select
+                aria-label="흐름 배치 방향"
+                value={direction}
+                onChange={(event) =>
+                  setDirection(event.target.value as typeof direction)
+                }
+              >
+                <option value="auto">자동</option>
+                <option value="horizontal">가로</option>
+                <option value="vertical">세로</option>
+              </select>
+            </label>
+          }
         >
           <div
             className="flow-canvas"
@@ -66,26 +96,17 @@ export default function FlowBoard({
                   <path d="M 0 0 L 10 5 L 0 10 z" fill="#668071" />
                 </marker>
               </defs>
-              {graph.edges.map((edge, i) => {
-                const a = nodeById.get(edge.source)!,
-                  b = nodeById.get(edge.target)!;
-                const start = a.x + 224,
-                  end = b.x;
-                const path = edge.feedback
-                  ? `M ${start} ${a.y + 50} C ${start + 35} ${a.y - 26}, ${end - 35} ${b.y - 26}, ${end} ${b.y + 50}`
-                  : `M ${start} ${a.y + 50} C ${(start + end) / 2} ${a.y + 50}, ${(start + end) / 2} ${b.y + 50}, ${end} ${b.y + 50}`;
-                return (
-                  <path
-                    key={i}
-                    d={path}
-                    fill="none"
-                    stroke="#668071"
-                    strokeWidth="1.7"
-                    strokeDasharray={edge.feedback ? '5 4' : undefined}
-                    markerEnd={`url(#${marker})`}
-                  />
-                );
-              })}
+              {graph.edges.map((edge, i) => (
+                <path
+                  key={i}
+                  d={edge.path}
+                  fill="none"
+                  stroke="#668071"
+                  strokeWidth="1.7"
+                  strokeDasharray={edge.feedback ? '5 4' : undefined}
+                  markerEnd={`url(#${marker})`}
+                />
+              ))}
             </svg>
             {graph.nodes.map((node) => {
               const card = byId.get(node.id)!;
@@ -109,7 +130,7 @@ export default function FlowBoard({
               );
             })}
           </div>
-        </div>
+        </GraphViewport>
       )}
       <details className="flow-connections">
         <summary>연결 목록 ({graph.edges.length})</summary>
