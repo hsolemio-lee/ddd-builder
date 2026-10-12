@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import type { User, Workspace, Project, Stage, Card, Kind } from './types';
 import { api, ApiError } from './api';
+import { syncWorkspace } from './workspace-sync';
 import { kinds, steps } from './workflow';
 import Login from './components/Login';
 import Board from './components/Board';
@@ -97,19 +98,6 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     let active = true;
-    const source = new EventSource('/api/events');
-    source.addEventListener('state', (event) => {
-      if (!active) return;
-      try {
-        setWorkspace(
-          normalizeWorkspace(JSON.parse((event as MessageEvent).data)),
-        );
-        setConnected(true);
-        setReceivedState(true);
-      } catch {
-        setNotice('보드 데이터를 읽지 못했어요. 새로고침해 주세요.');
-      }
-    });
     function applyUser(next: User) {
       if (!active) return;
       if (next.id !== user!.id) {
@@ -135,55 +123,49 @@ export default function App() {
       );
       if (!next.siteAdmin) setSecurityOpen(false);
     }
-    source.addEventListener('user', (event) => {
-      if (!active) return;
-      try {
-        applyUser(JSON.parse((event as MessageEvent).data));
-      } catch {
-        /* reconnect refreshes the session */
-      }
-    });
-    source.addEventListener('presence', (event) => {
-      if (active) {
-        try {
-          setPresence(JSON.parse((event as MessageEvent).data));
-        } catch {
-          /* next presence event refreshes */
-        }
-      }
-    });
-    source.onerror = () => {
-      if (!active) return;
-      setConnected(false);
-      api<{ user: User }>('/session')
-        .then((session) => {
-          applyUser(session.user);
-          return api<Workspace>('/state');
-        })
-        .then((next) => {
-          if (active) setWorkspace(normalizeWorkspace(next));
-        })
-        .catch((error) => {
-          if (active && error instanceof ApiError && error.status === 401) {
-            source.close();
-            if (user.email || user.guest) {
-              setWorkspace({ projects: [], cards: [] });
-              setEditor(undefined);
-              setDetails(undefined);
-              setProjectForm(undefined);
-              setDialog(undefined);
-              setSecurityOpen(false);
-              setReceivedState(false);
-              localStorage.removeItem('ddd-name');
-              localStorage.removeItem('ddd-project');
-              setUser(null);
-            } else setNeedsJoin(true);
-          }
-        });
-    };
+    const stop = syncWorkspace(
+      {
+        open: () => new EventSource('/api/events'),
+        session: async (signal) =>
+          (await api<{ user: User }>('/session', 'GET', undefined, signal))
+            .user,
+        state: (signal) => api<Workspace>('/state', 'GET', undefined, signal),
+      },
+      {
+        user: applyUser,
+        state(next, live) {
+          if (!active) return;
+          setWorkspace(normalizeWorkspace(next));
+          setConnected(live);
+          setReceivedState(true);
+        },
+        presence: setPresence,
+        disconnected() {
+          setConnected(false);
+          setPresence([]);
+        },
+        invalidState() {
+          setNotice('보드 데이터를 읽지 못했어요. 새로고침해 주세요.');
+        },
+        unauthorized() {
+          if (user.email || user.guest) {
+            setWorkspace({ projects: [], cards: [] });
+            setEditor(undefined);
+            setDetails(undefined);
+            setProjectForm(undefined);
+            setDialog(undefined);
+            setSecurityOpen(false);
+            setReceivedState(false);
+            localStorage.removeItem('ddd-name');
+            localStorage.removeItem('ddd-project');
+            setUser(null);
+          } else setNeedsJoin(true);
+        },
+      },
+    );
     return () => {
       active = false;
-      source.close();
+      stop();
       setConnected(false);
       setPresence([]);
     };

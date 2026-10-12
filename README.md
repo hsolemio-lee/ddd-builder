@@ -402,6 +402,10 @@ npm run test:docker
 
 Node 테스트는 임시 폴더에서 실제 HTTP와 MCP 클라이언트를 사용해 인증, 보안 헤더, 요청·세션·SSE 한도, 저장 복구, 충돌, 동시 요청, 내보내기, stdio 및 HTTP MCP 연결과 토큰 격리를 검증합니다. 브라우저 테스트는 별도 포트 `3211`과 `test-results/e2e-data`를 사용합니다.
 
+기설치된 Chromium을 사용할 때는 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium npm run test:e2e`처럼 실행할 수 있습니다. 지정하지 않으면 Playwright 기본 브라우저를 사용합니다.
+
+보드는 SSE로 변경을 받습니다. 연결 실패 시 재시도를 최대 60초까지 늦추고 전체 REST 상태의 보조 조회는 최대 분당 한 번으로 제한합니다. 세션 철회는 연결 종료 시 즉시 확인하며, 숨겨진 탭에서는 새로운 연결·재시도를 멈춥니다. [상태 동기화·재연결 동작과 검증 결과](docs/state-synchronization.md)를 참고하세요.
+
 ## 공식 서비스 인증과 보안
 
 기본 Compose 배포는 `production` 모드이며 OIDC 설정이 없으면 시작하지 않습니다. 명시적으로 선택하는 `workshop` 모드는 공유 코드 워크숍용입니다. 공식 서비스에서는 초대받은 개인의 OIDC 계정, 프로젝트별 관리자·편집자·조회자 권한, 감사 기록을 사용합니다. 읽기 전용 권한은 REST·내보내기·실시간 연결·MCP에서 모두 적용합니다.
