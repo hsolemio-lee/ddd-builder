@@ -4,17 +4,37 @@ import type { Card } from '../types';
 import { layoutFlow } from '../../shared/flow.mjs';
 import { statuses } from '../../shared/design.mjs';
 import { kinds } from '../workflow';
+import FlowConnectionEditor from './FlowConnectionEditor';
 
 export default function FlowBoard({
   cards,
   allCards,
   onOpen,
+  onPatch,
+  connected,
+  readOnly,
+  pending,
 }: {
   cards: Card[];
   allCards: Card[];
   onOpen: (card: Card) => void;
+  onPatch: (card: Card, change: Partial<Card>) => Promise<boolean>;
+  connected: boolean;
+  readOnly: boolean;
+  pending: Set<string>;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [editingLinks, setEditingLinks] = useState(false);
+  const [source, setSource] = useState('');
+  const [target, setTarget] = useState('');
+  const canConnectHere = cards.some((c) => c.stage === 'events');
+  function selectConnection(from: string, to = '') {
+    if (pending.size > 0) return;
+    setSource(from);
+    setTarget(to);
+    setEditingLinks(true);
+    setExpanded(false);
+  }
   const marker = useId().replace(/:/g, '');
   const [availableWidth, setAvailableWidth] = useState(1100);
   const [direction, setDirection] = useState<
@@ -45,12 +65,35 @@ export default function FlowBoard({
           필터를 해제해 확인하세요.
         </p>
       )}
-      {graph.edges.length === 0 ? (
+      {canConnectHere && (
+        <button
+          className="button"
+          disabled={pending.size > 0}
+          aria-expanded={editingLinks}
+          onClick={() => setEditingLinks((value) => !value)}
+        >
+          화면에서 연결 편집
+        </button>
+      )}
+      {editingLinks && canConnectHere && (
+        <FlowConnectionEditor
+          cards={allCards}
+          sourceId={source}
+          targetId={target}
+          onSource={setSource}
+          onTarget={setTarget}
+          connected={connected}
+          readOnly={readOnly}
+          pending={pending}
+          onPatch={onPatch}
+          onClose={() => setEditingLinks(false)}
+        />
+      )}
+      {graph.nodes.length === 0 ? (
         <div className="flow-empty">
-          <strong>첫 연결로 이야기를 이어 보세요.</strong>
+          <strong>표시할 카드가 없어요.</strong>
           <p>
-            카드 편집의 ‘나가는 연결’에서 명령과 결과 사건을 연결하면 흐름이
-            나타나요.
+            카드를 추가하거나 필터를 조정하세요. 연결 전의 카드도 표시합니다.
           </p>
         </div>
       ) : (
@@ -82,7 +125,12 @@ export default function FlowBoard({
             className="flow-canvas"
             style={{ width: graph.width, height: graph.height }}
           >
-            <svg width={graph.width} height={graph.height} aria-hidden="true">
+            <svg
+              width={graph.width}
+              height={graph.height}
+              aria-label="흐름 연결선"
+              role="group"
+            >
               <defs>
                 <marker
                   id={marker}
@@ -97,15 +145,36 @@ export default function FlowBoard({
                 </marker>
               </defs>
               {graph.edges.map((edge, i) => (
-                <path
-                  key={i}
-                  d={edge.path}
-                  fill="none"
-                  stroke="#668071"
-                  strokeWidth="1.7"
-                  strokeDasharray={edge.feedback ? '5 4' : undefined}
-                  markerEnd={`url(#${marker})`}
-                />
+                <g key={i}>
+                  <path
+                    key={i}
+                    d={edge.path}
+                    fill="none"
+                    stroke="#668071"
+                    strokeWidth="1.7"
+                    strokeDasharray={edge.feedback ? '5 4' : undefined}
+                    markerEnd={`url(#${marker})`}
+                  />
+                  {canConnectHere && (
+                    <path
+                      d={edge.path}
+                      stroke="transparent"
+                      strokeWidth="16"
+                      fill="none"
+                      className="flow-edge-hit"
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`흐름 연결: ${byId.get(edge.source)?.title} → ${byId.get(edge.target)?.title}`}
+                      onClick={() => selectConnection(edge.source, edge.target)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          selectConnection(edge.source, edge.target);
+                        }
+                      }}
+                    />
+                  )}
+                </g>
               ))}
             </svg>
             {graph.nodes.map((node) => {
@@ -113,10 +182,15 @@ export default function FlowBoard({
               return (
                 <button
                   key={node.id}
-                  className={`flow-node card-${kinds[card.kind].color}`}
+                  className={`flow-node card-${kinds[card.kind].color} ${graph.unconnected.includes(card.id) ? 'flow-unconnected' : ''} ${editingLinks && (source === card.id || target === card.id) ? 'flow-selected' : ''}`}
                   style={{ left: node.x, top: node.y }}
                   aria-label={`흐름 카드: ${card.title}`}
-                  onClick={() => onOpen(card)}
+                  onClick={() => {
+                    if (pending.size > 0) return;
+                    if (!editingLinks) onOpen(card);
+                    else if (!source) setSource(card.id);
+                    else setTarget(card.id);
+                  }}
                 >
                   <span>
                     {kinds[card.kind].label} · {statuses[card.status]}

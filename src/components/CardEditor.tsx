@@ -1,7 +1,14 @@
 import DocumentationFields from './DocumentationFields';
 import { useRef, useState, type FormEvent } from 'react';
 import { Check, Trash2, RefreshCw, AlertCircle } from 'lucide-react';
-import type { Card, CardDraft, Kind, Stage, User } from '../types';
+import type {
+  Card,
+  CardDraft,
+  Kind,
+  Stage,
+  User,
+  EventPlacement,
+} from '../types';
 import { kinds, steps } from '../workflow';
 import { api, ApiError } from '../api';
 import Modal from './Modal';
@@ -13,6 +20,7 @@ import { statuses, scenarios } from '../../shared/design.mjs';
 
 export default function CardEditor({
   card,
+  placement: initialPlacement,
   stage,
   kind,
   projectId,
@@ -23,6 +31,7 @@ export default function CardEditor({
   onSaved,
 }: {
   card?: Card;
+  placement?: EventPlacement;
   stage: Stage;
   kind?: Kind;
   projectId: string;
@@ -33,6 +42,11 @@ export default function CardEditor({
   onSaved: () => void;
 }) {
   const [base, setBase] = useState(card);
+  const [placement, setPlacement] = useState(initialPlacement);
+  const anchor = cards.find((c) => c.id === placement?.anchorId);
+  const placementChanged = Boolean(
+    placement && (!anchor || anchor.revision !== placement.anchorRevision),
+  );
   const [draft, setDraft] = useState<CardDraft>(
     card
       ? { ...card, data: { ...card.data } }
@@ -41,11 +55,11 @@ export default function CardEditor({
           kind: kind || steps.find((s) => s.id === stage)!.kinds[0],
           status: 'proposed',
           decision: '',
-          scenario: 'shared',
+          scenario: anchor?.scenario || 'shared',
           links: [],
           title: '',
           description: '',
-          contextId: null,
+          contextId: anchor?.contextId || null,
           data: {},
           position:
             Math.max(
@@ -122,11 +136,23 @@ export default function CardEditor({
         await api(`/projects/${projectId}/cards`, 'POST', {
           ...payload,
           stage: draft.stage,
+          ...(draft.stage === 'events' && draft.kind === 'event'
+            ? { placement: placement || { side: 'end' } }
+            : {}),
         });
       onSaved();
       onClose();
     } catch (error) {
-      if (error instanceof ApiError && error.status === 409) {
+      if (
+        error instanceof ApiError &&
+        error.status === 409 &&
+        placement &&
+        !base
+      ) {
+        setError(
+          '삽입 기준 사건이 변경됐어요. 위치를 다시 확인해 주세요. 작성한 내용은 유지됩니다.',
+        );
+      } else if (error instanceof ApiError && error.status === 409) {
         setConflict(error.current as Card);
         setError('다른 참여자가 먼저 수정했어요.');
       } else
@@ -169,11 +195,56 @@ export default function CardEditor({
         </div>
         <div className="editor-fields">
           <fieldset className="editor-inputs" disabled={busy}>
+            {placement && (
+              <section
+                className="story-insertion-note"
+                aria-label="사건 삽입 위치"
+              >
+                <strong>
+                  {anchor
+                    ? `${anchor.title} ${placement.side === 'before' ? '앞' : '뒤'}에 새 사건 추가`
+                    : '기준 사건을 확인할 수 없습니다.'}
+                </strong>
+                <p>표시 위치만 정하며 업무 흐름을 자동 연결하지 않습니다.</p>
+                {placementChanged && (
+                  <p role="status">
+                    기준 사건이 변경됐어요. 최신 위치를 확인하거나 끝에
+                    추가하세요.
+                  </p>
+                )}
+                {placementChanged && anchor && (
+                  <button
+                    type="button"
+                    className="button small"
+                    onClick={() => {
+                      setPlacement({
+                        ...placement,
+                        anchorRevision: anchor.revision,
+                      });
+                      setError('');
+                    }}
+                  >
+                    최신 삽입 기준 확인
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="button small"
+                  onClick={() => {
+                    setPlacement(undefined);
+                    setError('');
+                  }}
+                >
+                  끝에 추가로 변경
+                </button>
+              </section>
+            )}
             {steps.find((s) => s.id === draft.stage)!.kinds.length > 1 && (
               <label>
                 카드 유형
                 <select
                   aria-label="카드 유형"
+                  disabled={Boolean(placement)}
                   value={draft.kind}
                   onChange={(e) => changeKind(e.target.value as Kind)}
                 >

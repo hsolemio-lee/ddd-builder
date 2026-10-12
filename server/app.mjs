@@ -1013,15 +1013,100 @@ export async function createApp({
         return;
       }
       if (
+        (match = path.match(/^\/api\/projects\/([^/]+)\/event-order$/)) &&
+        method === 'POST'
+      ) {
+        const value = await body(req);
+        authorize(match[1], 'editor');
+        if (!store.project(match[1])) fail(404, '프로젝트를 찾을 수 없습니다.');
+        allowed(value, ['cards']);
+        if (!Array.isArray(value.cards)) fail(400, '이벤트 목록이 필요합니다.');
+        const cards = store.transaction(() => {
+          const events = store
+            .state()
+            .cards.filter(
+              (c) =>
+                c.projectId === match[1] &&
+                c.stage === 'events' &&
+                c.kind === 'event',
+            );
+          const byId = new Map(events.map((c) => [c.id, c]));
+          if (
+            value.cards.length !== events.length ||
+            new Set(value.cards.map((c) => c?.id)).size !== events.length ||
+            value.cards.some((c) => !byId.has(c?.id))
+          )
+            fail(409, '이벤트 목록이 변경됐어요. 최신 순서를 확인해 주세요.');
+          const ordered = value.cards.map((c) => {
+            allowed(c, ['id', 'revision']);
+            const current = byId.get(c.id);
+            revision(c, current);
+            return current;
+          });
+          const saved = ordered.map((c, position) => {
+            if (c.position === position) return c;
+            const next = changed(c, { position }, user);
+            store.saveCard(next);
+            return next;
+          });
+          auditChange('event.order', match[1], match[1]);
+          return saved;
+        });
+        broadcast();
+        json(res, 200, { cards });
+        return;
+      }
+      if (
         (match = path.match(/^\/api\/projects\/([^/]+)\/cards$/)) &&
         method === 'POST'
       ) {
         const value = await body(req);
         authorize(match[1], 'editor');
         if (!store.project(match[1])) fail(404, '프로젝트를 찾을 수 없습니다.');
-        const fields = cardFields(value, match[1], store);
+        const { placement, ...input } = value;
+        const fields = cardFields(input, match[1], store);
         const card = record({ projectId: match[1], ...fields }, user.name);
         store.transaction(() => {
+          if (placement !== undefined) {
+            allowed(placement, ['anchorId', 'anchorRevision', 'side']);
+            if (
+              fields.stage !== 'events' ||
+              fields.kind !== 'event' ||
+              !['before', 'after', 'end'].includes(placement.side)
+            )
+              fail(400, '사건 앞뒤 삽입은 이벤트 카드에만 사용할 수 있습니다.');
+            const events = store
+              .state()
+              .cards.filter(
+                (c) =>
+                  c.projectId === match[1] &&
+                  c.stage === 'events' &&
+                  c.kind === 'event',
+              )
+              .sort(comparePosition);
+            if (placement.side === 'end') {
+              allowed(placement, ['side']);
+              events.push(card);
+            } else {
+              const anchor = events.find((c) => c.id === placement.anchorId);
+              if (!anchor)
+                fail(
+                  409,
+                  '기준 사건이 삭제되거나 변경됐어요. 삽입 위치를 다시 확인해 주세요.',
+                );
+              revision({ revision: placement.anchorRevision }, anchor);
+              events.splice(
+                events.indexOf(anchor) + (placement.side === 'after' ? 1 : 0),
+                0,
+                card,
+              );
+            }
+            events.forEach((c, position) => {
+              if (c === card) card.position = position;
+              else if (c.position !== position)
+                store.saveCard(changed(c, { position }, user));
+            });
+          }
           store.saveCard(card);
           auditChange('card.change', card.projectId, card.id);
         });

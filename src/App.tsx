@@ -19,7 +19,15 @@ import {
   WifiOff,
   LoaderCircle,
 } from 'lucide-react';
-import type { User, Workspace, Project, Stage, Card, Kind } from './types';
+import type {
+  User,
+  Workspace,
+  Project,
+  Stage,
+  Card,
+  Kind,
+  EventPlacement,
+} from './types';
 import { api, ApiError } from './api';
 import { syncWorkspace } from './workspace-sync';
 import { kinds, steps } from './workflow';
@@ -33,6 +41,7 @@ import CardDetails from './components/CardDetails';
 import AccessDialog from './components/AccessDialog';
 import SecurityDialog from './components/SecurityDialog';
 import FlowBoard from './components/FlowBoard';
+import EventStoryBoard from './components/EventStoryBoard';
 import DesignReview from './components/DesignReview';
 import ContextMap from './components/ContextMap';
 import AggregateBoard from './components/AggregateBoard';
@@ -60,6 +69,7 @@ export default function App() {
     kind?: Kind;
     stage: Stage;
     projectId: string;
+    placement?: EventPlacement;
   }>();
   const [projectForm, setProjectForm] = useState<{ project?: Project }>();
   const [dialog, setDialog] = useState<'share' | 'mcp' | 'export'>();
@@ -72,9 +82,9 @@ export default function App() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [contextFilter, setContextFilter] = useState('all');
   const [scenarioFilter, setScenarioFilter] = useState('all');
-  const [view, setView] = useState<'cards' | 'flow' | 'map' | 'aggregate'>(
-    'cards',
-  );
+  const [view, setView] = useState<
+    'story' | 'cards' | 'flow' | 'map' | 'aggregate'
+  >('story');
   const [reviewOpen, setReviewOpen] = useState(false);
   const [notice, setNotice] = useState('');
   const [receivedState, setReceivedState] = useState(false);
@@ -259,7 +269,9 @@ export default function App() {
         ? 'map'
         : nextStage === 'aggregates'
           ? 'aggregate'
-          : 'cards',
+          : nextStage === 'events'
+            ? 'story'
+            : 'cards',
     );
   }
   function navigate(next: Stage) {
@@ -273,7 +285,7 @@ export default function App() {
     setNotice(message);
   }
   async function patch(card: Card, change: Partial<Card>) {
-    if (!canEdit || !connected || pendingRef.current.has(card.id)) return;
+    if (!canEdit || !connected || pendingRef.current.has(card.id)) return false;
     pendingRef.current.add(card.id);
     setPending(new Set(pendingRef.current));
     setWorkspace((current) => ({
@@ -293,6 +305,7 @@ export default function App() {
           c.id === saved.id && c.revision <= saved.revision ? saved : c,
         ),
       }));
+      return true;
     } catch (error) {
       setWorkspace((current) => ({
         ...current,
@@ -317,8 +330,42 @@ export default function App() {
             ? error.message
             : '변경하지 못했어요.',
       );
+      return false;
     } finally {
       pendingRef.current.delete(card.id);
+      setPending(new Set(pendingRef.current));
+    }
+  }
+  async function reorderEvents(cards: Card[]) {
+    if (!project || !canEdit || !connected || pendingRef.current.size)
+      return false;
+    for (const card of cards) pendingRef.current.add(card.id);
+    setPending(new Set(pendingRef.current));
+    try {
+      const saved = await api<{ cards: Card[] }>(
+        `/projects/${project.id}/event-order`,
+        'POST',
+        {
+          cards: cards.map(({ id, revision }) => ({ id, revision })),
+        },
+      );
+      const byId = new Map(saved.cards.map((c) => [c.id, c]));
+      setWorkspace((current) => ({
+        ...current,
+        cards: current.cards.map((c) => {
+          const next = byId.get(c.id);
+          return next && c.revision <= next.revision ? next : c;
+        }),
+      }));
+      notify('사건의 표시 순서를 저장했어요. 업무 연결은 유지됩니다.');
+      return true;
+    } catch (error) {
+      notify(
+        error instanceof Error ? error.message : '순서를 저장하지 못했어요.',
+      );
+      return false;
+    } finally {
+      for (const card of cards) pendingRef.current.delete(card.id);
       setPending(new Set(pendingRef.current));
     }
   }
@@ -710,6 +757,15 @@ export default function App() {
                     role="group"
                     aria-label="보드 보기"
                   >
+                    {stage === 'events' && (
+                      <button
+                        className={view === 'story' ? 'active' : ''}
+                        aria-pressed={view === 'story'}
+                        onClick={() => setView('story')}
+                      >
+                        사건 순서
+                      </button>
+                    )}
                     <button
                       className={view === 'map' ? 'active' : ''}
                       aria-pressed={view === 'map'}
@@ -874,12 +930,53 @@ export default function App() {
                     })
                   }
                 />
+              ) : view === 'story' && stage === 'events' ? (
+                <EventStoryBoard
+                  key={project.id}
+                  cards={displayedCards}
+                  allCards={projectCards}
+                  showAuxiliary={filter !== 'all' && filter !== 'event'}
+                  typeFilter={filter}
+                  connected={connected}
+                  pending={pending}
+                  readOnly={!canEdit}
+                  allowOrder={
+                    !query &&
+                    statusFilter === 'all' &&
+                    contextFilter === 'all' &&
+                    scenarioFilter === 'all'
+                  }
+                  onOpen={openCard}
+                  onPatch={patch}
+                  onMove={move}
+                  onReorder={reorderEvents}
+                  onAdd={(kind) =>
+                    setEditor({ stage, kind, projectId: project.id })
+                  }
+                  onInsert={(card, side) =>
+                    setEditor({
+                      stage: 'events',
+                      kind: 'event',
+                      projectId: project.id,
+                      placement: {
+                        anchorId: card.id,
+                        anchorRevision: card.revision,
+                        side,
+                      },
+                    })
+                  }
+                />
               ) : view === 'flow' &&
                 (stage === 'events' || stage === 'contexts') ? (
                 <FlowBoard
+                  key={`${project.id}:${stage}`}
                   cards={displayedCards}
                   allCards={projectCards}
                   onOpen={openCard}
+                  connected={connected}
+                  pending={pending}
+                  readOnly={!canEdit}
+                  onPatch={patch}
                 />
               ) : (
                 <Board
@@ -965,6 +1062,7 @@ export default function App() {
             `${editor.projectId}-${editor.stage}-${editor.kind || 'new'}`
           }
           card={editor.card}
+          placement={editor.placement}
           kind={editor.kind}
           stage={editor.stage}
           cards={workspace.cards.filter(

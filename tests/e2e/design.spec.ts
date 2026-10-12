@@ -50,7 +50,9 @@ test('human links, agreement, filters and review remain visible after reload', a
       exact: true,
     }),
   ).toBeVisible();
-  await expect(page.locator('.flow-canvas svg > path')).toHaveCount(1);
+  await expect(
+    page.locator('.flow-canvas svg path[stroke="#668071"]'),
+  ).toHaveCount(1);
   await page.getByRole('button', { name: '설계 점검', exact: true }).click();
   await expect(
     page.getByRole('region', { name: '설계 점검 결과' }),
@@ -81,6 +83,7 @@ test('human links, agreement, filters and review remain visible after reload', a
   await page.getByRole('button', { name: '카드 저장', exact: true }).click();
   await page.getByLabel('검토 상태 필터').selectOption('all');
   await page.reload();
+  await page.getByRole('button', { name: '카드 보기', exact: true }).click();
   await expect(
     page.getByRole('button', {
       name: '카드 편집: 결제 승인 요청',
