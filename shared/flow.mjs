@@ -103,6 +103,17 @@ export function layoutFlow(cards, options = {}) {
       );
     offset += rows * 144 + 32;
   }
+  const unconnected = cards
+    .filter((c) => !connected.has(c.id))
+    .sort((a, b) => a.position - b.position || a.id.localeCompare(b.id));
+  const looseColumns = Math.max(1, Math.floor((options.width || 1100) / 286));
+  unconnected.forEach((card, i) =>
+    nodes.push({
+      id: card.id,
+      x: 24 + (i % looseColumns) * 286,
+      y: offset + Math.floor(i / looseColumns) * 144,
+    }),
+  );
   const horizontalWidth = Math.max(320, ...nodes.map((n) => n.x + 248));
   const horizontalHeight = Math.max(180, ...nodes.map((n) => n.y + 144));
   const verticalWidth = Math.max(

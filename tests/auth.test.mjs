@@ -220,6 +220,51 @@ test('project roles, IDOR, personal MCP tokens and live revocation are server en
   });
   assert.equal(minted.status, 201);
   const board = createBoardClient({ url: s.base, token: minted.value.token });
+  assert.equal(
+    (
+      await s.request(
+        `/projects/${project.id}/event-order`,
+        viewer.cookie,
+        'POST',
+        { cards: [] },
+      )
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await s.request(
+        `/projects/${hidden.id}/event-order`,
+        viewer.cookie,
+        'POST',
+        { cards: [] },
+      )
+    ).status,
+    404,
+  );
+  assert.equal(
+    (
+      await s.request(`/projects/${project.id}/cards`, viewer.cookie, 'POST', {
+        stage: 'events',
+        kind: 'event',
+        title: '권한 없는 삽입',
+        placement: { side: 'end' },
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await s.request(
+        `/projects/${project.id}/event-order`,
+        undefined,
+        'POST',
+        { cards: [] },
+        minted.value.token,
+      )
+    ).status,
+    403,
+  );
   assert.equal((await board.request('/state')).projects.length, 1);
   await assert.rejects(
     board.request(`/projects/${project.id}/cards`, 'POST', {

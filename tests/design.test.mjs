@@ -292,6 +292,21 @@ test('flow layout supports retry loops and ignores targets outside the filtered 
   assert.equal(filtered.nodes.length, 2);
 });
 
+test('flow canvas includes collected events before any connections exist', () => {
+  const cards = [
+    { id: 'second', stage: 'events', position: 2, links: [] },
+    { id: 'first', stage: 'events', position: 0, links: [] },
+  ];
+  const graph = layoutFlow(cards, { direction: 'horizontal' });
+  assert.equal(graph.nodes.length, 2);
+  assert.deepEqual(
+    graph.nodes.map((n) => n.id),
+    ['first', 'second'],
+  );
+  assert.equal(graph.edges.length, 0);
+  assert.equal(graph.unconnected.length, 2);
+});
+
 test('context regions preserve ownership, empty boundaries and directional cross-boundary flows', () => {
   const contexts = ['주문', '결제', '재고', '배송'].map((title, i) => ({
     id: 'c' + i,

@@ -128,7 +128,9 @@ export default function GraphViewport({
           if (
             event.button !== 0 ||
             event.pointerType !== 'mouse' ||
-            (event.target as Element).closest('button, a, input, select')
+            (event.target as Element).closest(
+              'button, a, input, select, [role="button"]',
+            )
           )
             return;
           const element = event.currentTarget;

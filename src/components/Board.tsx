@@ -21,6 +21,7 @@ export default function Board({
   pending,
   readOnly = false,
   allowMove = true,
+  excludeKinds = [],
   onEdit,
   onAdd,
   onPatch,
@@ -35,6 +36,7 @@ export default function Board({
   pending: Set<string>;
   readOnly?: boolean;
   allowMove?: boolean;
+  excludeKinds?: Kind[];
   onEdit: (card: Card) => void;
   onAdd: (kind?: Kind) => void;
   onPatch: (card: Card, patch: Partial<Card>) => void;
@@ -43,7 +45,9 @@ export default function Board({
   const contexts = allCards.filter((c) => c.stage === 'contexts');
   const shownKinds = steps
     .find((s) => s.id === stage)!
-    .kinds.filter((k) => filter === 'all' || filter === k);
+    .kinds.filter(
+      (k) => !excludeKinds.includes(k) && (filter === 'all' || filter === k),
+    );
   const visible = cards.filter(
     (c) =>
       (!query ||

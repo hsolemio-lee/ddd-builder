@@ -7,6 +7,8 @@
 - `GET /api/auth/callback`: ID 토큰 검증, 초대/최초 관리자 확인, 새 세션 발급 후 `/`로 이동. 실패는 비밀값 없는 로그인 오류 표시
 - `GET /api/session`: `{ user: { id, name, email?, siteAdmin?, guest?: true } }`
 - `GET /api/state`: 사용자에게 허용된 프로젝트와 카드만. 각 프로젝트의 `role?: 'admin' | 'editor' | 'viewer'`는 응답에서만 추가
+- `POST /api/projects/:id/event-order`: 편집 권한으로 전체 이벤트 ID·revision 목록의 순서를 원자적으로 저장. 사건 집합·버전 변경 시 409이며 다른 종류의 카드·업무 링크·합의 상태는 보존
+- `POST /api/projects/:id/cards`: 기존 생성 본문에 `placement: {anchorId,anchorRevision,side:'before'|'after'}` 또는 `{side:'end'}`를 추가해 이벤트를 삽입 가능. 같은 프로젝트의 이벤트 기준을 검사하고 생성·위치 변경을 함께 저장. 이 필드는 저장된 카드에 포함하지 않음
 - `GET /api/projects/:id/access`: 관리자에게 `{ members: [{ userId, name, email, role }], invitations: [{ id, email, role, expiresAt }] }`
 - `POST /api/projects/:id/invitations`: `{ email, role }` → 초대 메타데이터. 7일 만료. 검증된 이메일 소유자만 수락
 - `DELETE /api/projects/:id/invitations/:invitationId`: 초대 취소

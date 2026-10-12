@@ -102,3 +102,8 @@ export interface Workspace {
   projects: Project[];
   cards: Card[];
 }
+export interface EventPlacement {
+  anchorId: string;
+  anchorRevision: number;
+  side: 'before' | 'after';
+}
