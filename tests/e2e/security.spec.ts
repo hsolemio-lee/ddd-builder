@@ -209,6 +209,116 @@ test('site-admin demotion clears the open admin dialog on stream reconnect', asy
   ).toHaveCount(0);
 });
 
+test('account MCP target defaults to all projects and filters listed credentials', async ({
+  page,
+}) => {
+  const editorProject = {
+    ...project,
+    id: 'writable-project',
+    name: '편집 가능한 프로젝트',
+    role: 'editor' as const,
+  };
+  const projects = [project, editorProject];
+  const credentials = [
+    {
+      id: 'account-token',
+      name: '내 모든 프로젝트 연결',
+      projectId: null,
+      scope: 'read' as const,
+      expiresAt: '2026-10-27T00:00:00Z',
+      createdAt: '2026-10-20T00:00:00Z',
+    },
+    {
+      id: 'current-token',
+      name: '현재 프로젝트 연결',
+      projectId: project.id,
+      scope: 'write' as const,
+      expiresAt: '2026-10-27T00:00:00Z',
+      createdAt: '2026-10-20T00:00:00Z',
+    },
+    {
+      id: 'other-token',
+      name: '다른 프로젝트 연결',
+      projectId: editorProject.id,
+      scope: 'read' as const,
+      expiresAt: '2026-10-27T00:00:00Z',
+      createdAt: '2026-10-20T00:00:00Z',
+    },
+  ];
+  let postedBody: Record<string, unknown> | undefined;
+  await page.route('**/api/auth/config', (route) =>
+    route.fulfill({ json: { mode: 'oidc' } }),
+  );
+  await page.route('**/api/session', (route) =>
+    route.fulfill({ json: { user } }),
+  );
+  await page.route('**/api/state', (route) =>
+    route.fulfill({ json: { projects, cards: [] } }),
+  );
+  await page.route('**/api/events', (route) =>
+    route.fulfill({
+      contentType: 'text/event-stream',
+      body: `event: state\ndata: ${JSON.stringify({ projects, cards: [] })}\n\n`,
+    }),
+  );
+  await page.route('**/api/info', (route) =>
+    route.fulfill({
+      json: {
+        urls: ['https://ddd.example'],
+        mcpHttp: { url: 'https://ddd.example/mcp' },
+        mcp: {
+          command: 'node',
+          args: ['/app/mcp/index.mjs'],
+          env: { DDD_URL: 'http://127.0.0.1:3210' },
+        },
+      },
+    }),
+  );
+  await page.route('**/api/tokens', (route) => {
+    if (route.request().method() === 'POST') {
+      postedBody = route.request().postDataJSON();
+      return route.fulfill({
+        json: {
+          token: 'account-personal-token',
+          credential: {
+            id: 'new-account-token',
+            name: '새 연결',
+            projectId: null,
+            scope: 'read',
+            expiresAt: '2026-10-27T00:00:00Z',
+            createdAt: '2026-10-20T00:00:00Z',
+          },
+        },
+      });
+    }
+    return route.fulfill({ json: { tokens: credentials } });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'AI와 함께 설계하기' }).click();
+
+  const target = page.getByLabel('접근 대상');
+  await expect(target).toHaveValue('account');
+  const writePermission = page.getByLabel(/카드 편집 허용/);
+  await expect(writePermission).toBeEnabled();
+  await target.selectOption('project');
+  await expect(writePermission).toBeDisabled();
+  await target.selectOption('account');
+
+  const accountRow = page.locator('.access-row').filter({
+    hasText: '내 모든 프로젝트 연결',
+  });
+  const projectRow = page.locator('.access-row').filter({
+    hasText: '현재 프로젝트 연결',
+  });
+  await expect(accountRow).toContainText('내 모든 프로젝트');
+  await expect(projectRow).toContainText('현재 프로젝트만');
+  await expect(
+    page.locator('.access-row').filter({ hasText: '다른 프로젝트 연결' }),
+  ).toHaveCount(0);
+  await page.getByRole('button', { name: '새 MCP 토큰 만들기' }).click();
+  await expect.poll(() => postedBody?.projectId).toBeNull();
+});
+
 test('personal MCP setup offers HTTP and preserves stdio configuration', async ({
   page,
 }) => {

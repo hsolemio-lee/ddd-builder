@@ -542,6 +542,575 @@ test('tokens are hashed, scoped, expiring, revocable and reduced by live members
   );
 });
 
+test('account tokens follow live memberships and preserve each project role', async (t) => {
+  const s = await setup(t);
+  const owner = await login(s.base, s.fixture);
+  const initial = (await s.request('/state', owner.cookie)).value.projects[0];
+  const viewerProject = (
+    await s.request('/projects', owner.cookie, 'POST', {
+      name: 'Viewer project',
+    })
+  ).value;
+  const laterProject = (
+    await s.request('/projects', owner.cookie, 'POST', {
+      name: 'Later project',
+    })
+  ).value;
+  const privateProject = (
+    await s.request('/projects', owner.cookie, 'POST', {
+      name: 'Private project',
+    })
+  ).value;
+
+  for (const [projectId, role] of [
+    [initial.id, 'editor'],
+    [viewerProject.id, 'viewer'],
+  ]) {
+    assert.equal(
+      (
+        await s.request(
+          `/projects/${projectId}/invitations`,
+          owner.cookie,
+          'POST',
+          {
+            email: 'account-member@example.com',
+            role,
+          },
+        )
+      ).status,
+      201,
+    );
+  }
+  const member = await login(s.base, s.fixture, {
+    sub: 'account-member',
+    email: 'account-member@example.com',
+    name: 'Account member',
+  });
+  const memberId = (await s.request('/session', member.cookie)).value.user.id;
+  for (const fields of [
+    { name: 'Missing target' },
+    { name: 'Empty target', projectId: '' },
+    { name: 'Numeric target', projectId: 7 },
+    { name: 'Object target', projectId: {} },
+  ]) {
+    assert.equal(
+      (
+        await s.request('/tokens', member.cookie, 'POST', {
+          ...fields,
+          scope: 'read',
+        })
+      ).status,
+      400,
+    );
+  }
+  const minted = await s.request('/tokens', member.cookie, 'POST', {
+    name: 'My projects',
+    projectId: null,
+    scope: 'read',
+  });
+  assert.equal(minted.status, 201);
+  assert.equal(minted.value.credential.projectId, null);
+  const accountToken = minted.value.token;
+  assert.equal(
+    (
+      await s.request(
+        '/tokens',
+        undefined,
+        'POST',
+        { name: 'Bearer cannot mint', projectId: null },
+        accountToken,
+      )
+    ).status,
+    403,
+  );
+  const state = await s.request(
+    '/state',
+    undefined,
+    'GET',
+    undefined,
+    accountToken,
+  );
+  assert.deepEqual(
+    state.value.projects.map((p) => [p.id, p.role]).sort(),
+    [
+      [initial.id, 'viewer'],
+      [viewerProject.id, 'viewer'],
+    ].sort(),
+  );
+  assert.equal(
+    (
+      await s.request(
+        `/projects/${initial.id}/cards`,
+        undefined,
+        'POST',
+        { stage: 'events', kind: 'event', title: 'Read token write' },
+        accountToken,
+      )
+    ).status,
+    403,
+  );
+
+  const scoped = await s.request('/tokens', member.cookie, 'POST', {
+    name: 'One project',
+    projectId: initial.id,
+    scope: 'read',
+  });
+  assert.equal(scoped.status, 201);
+  const scopedState = await s.request(
+    '/state',
+    undefined,
+    'GET',
+    undefined,
+    scoped.value.token,
+  );
+  assert.deepEqual(
+    scopedState.value.projects.map((p) => p.id),
+    [initial.id],
+  );
+
+  const write = await s.request('/tokens', member.cookie, 'POST', {
+    name: 'Editable projects',
+    projectId: null,
+    scope: 'write',
+  });
+  assert.equal(write.status, 201);
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+  const { StreamableHTTPClientTransport } =
+    await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
+  const httpClient = new Client({
+    name: 'account-http-test',
+    version: '1.0.0',
+  });
+  await httpClient.connect(
+    new StreamableHTTPClientTransport(new URL(s.base + '/mcp'), {
+      requestInit: { headers: { Authorization: `Bearer ${accountToken}` } },
+    }),
+  );
+  t.after(() => httpClient.close());
+  const httpProjects = await httpClient.callTool({ name: 'list_projects' });
+  assert.deepEqual(
+    JSON.parse(httpProjects.content[0].text)
+      .map((p) => p.id)
+      .sort(),
+    [initial.id, viewerProject.id].sort(),
+  );
+  const httpBoard = await httpClient.callTool({
+    name: 'get_project_board',
+    arguments: { projectId: viewerProject.id },
+  });
+  assert.equal(
+    JSON.parse(httpBoard.content[0].text).project.id,
+    viewerProject.id,
+  );
+  const httpDocuments = await httpClient.callTool({
+    name: 'get_domain_documents',
+    arguments: { projectId: viewerProject.id },
+  });
+  assert.notEqual(httpDocuments.isError, true, JSON.stringify(httpDocuments));
+  const httpResources = await httpClient.readResource({
+    uri: 'ddd://projects',
+  });
+  assert.deepEqual(
+    JSON.parse(httpResources.contents[0].text)
+      .map((p) => p.id)
+      .sort(),
+    [initial.id, viewerProject.id].sort(),
+  );
+  const exported = await s.request(
+    `/projects/${viewerProject.id}/export?format=json`,
+    undefined,
+    'GET',
+    undefined,
+    accountToken,
+  );
+  assert.equal(exported.status, 200);
+  assert.equal(exported.value.project.id, viewerProject.id);
+
+  const { StdioClientTransport } =
+    await import('@modelcontextprotocol/sdk/client/stdio.js');
+  const { resolve } = await import('node:path');
+  const stdio = new StdioClientTransport({
+    command: process.execPath,
+    args: [resolve('mcp/index.mjs')],
+    env: {
+      ...process.env,
+      DDD_URL: s.base,
+      DDD_TOKEN: accountToken,
+      DDD_READ_ONLY: 'true',
+    },
+    stderr: 'pipe',
+  });
+  const stdioClient = new Client({
+    name: 'account-stdio-test',
+    version: '1.0.0',
+  });
+  await stdioClient.connect(stdio);
+  t.after(() => stdioClient.close());
+  const stdioProjects = await stdioClient.callTool({ name: 'list_projects' });
+  assert.deepEqual(
+    JSON.parse(stdioProjects.content[0].text)
+      .map((p) => p.id)
+      .sort(),
+    [initial.id, viewerProject.id].sort(),
+  );
+  const stdioBoard = await stdioClient.callTool({
+    name: 'get_project_board',
+    arguments: { projectId: viewerProject.id },
+  });
+  assert.equal(
+    JSON.parse(stdioBoard.content[0].text).project.id,
+    viewerProject.id,
+  );
+
+  const writer = new Client({ name: 'account-write-test', version: '1.0.0' });
+  await writer.connect(
+    new StreamableHTTPClientTransport(new URL(s.base + '/mcp'), {
+      requestInit: {
+        headers: { Authorization: `Bearer ${write.value.token}` },
+      },
+    }),
+  );
+  t.after(() => writer.close());
+  const created = await writer.callTool({
+    name: 'create_card',
+    arguments: {
+      projectId: initial.id,
+      stage: 'events',
+      kind: 'event',
+      title: 'Editor project write',
+    },
+  });
+  assert.notEqual(created.isError, true, JSON.stringify(created));
+  const denied = await writer.callTool({
+    name: 'create_card',
+    arguments: {
+      projectId: viewerProject.id,
+      stage: 'events',
+      kind: 'event',
+      title: 'Viewer project write',
+    },
+  });
+  assert.equal(denied.isError, true);
+  assert.equal(JSON.parse(denied.content[0].text).status, 403);
+
+  assert.equal(
+    (
+      await s.request(
+        `/projects/${laterProject.id}/invitations`,
+        owner.cookie,
+        'POST',
+        {
+          email: 'account-member@example.com',
+          role: 'editor',
+        },
+      )
+    ).status,
+    201,
+  );
+  const reconnected = await login(s.base, s.fixture, {
+    sub: 'account-member',
+    email: 'account-member@example.com',
+  });
+  assert.ok(reconnected.cookie);
+  assert.deepEqual(
+    (
+      await s.request('/state', undefined, 'GET', undefined, accountToken)
+    ).value.projects
+      .map((p) => p.id)
+      .sort(),
+    [initial.id, viewerProject.id, laterProject.id].sort(),
+  );
+  const httpAfterJoin = await httpClient.callTool({ name: 'list_projects' });
+  assert.deepEqual(
+    JSON.parse(httpAfterJoin.content[0].text)
+      .map((p) => p.id)
+      .sort(),
+    [initial.id, viewerProject.id, laterProject.id].sort(),
+  );
+  const stdioAfterJoin = await stdioClient.callTool({ name: 'list_projects' });
+  assert.deepEqual(
+    JSON.parse(stdioAfterJoin.content[0].text)
+      .map((p) => p.id)
+      .sort(),
+    [initial.id, viewerProject.id, laterProject.id].sort(),
+  );
+
+  assert.equal(
+    (
+      await s.request(
+        `/projects/${initial.id}/members/${memberId}`,
+        owner.cookie,
+        'DELETE',
+      )
+    ).status,
+    200,
+  );
+  const afterRemoval = await s.request(
+    '/state',
+    undefined,
+    'GET',
+    undefined,
+    accountToken,
+  );
+  assert.deepEqual(
+    afterRemoval.value.projects.map((p) => p.id).sort(),
+    [viewerProject.id, laterProject.id].sort(),
+  );
+  const httpAfterRemoval = await httpClient.callTool({ name: 'list_projects' });
+  assert.deepEqual(
+    JSON.parse(httpAfterRemoval.content[0].text)
+      .map((p) => p.id)
+      .sort(),
+    [viewerProject.id, laterProject.id].sort(),
+  );
+  const stdioAfterRemoval = await stdioClient.callTool({
+    name: 'list_projects',
+  });
+  assert.deepEqual(
+    JSON.parse(stdioAfterRemoval.content[0].text)
+      .map((p) => p.id)
+      .sort(),
+    [viewerProject.id, laterProject.id].sort(),
+  );
+  assert.equal(
+    (
+      await s.request(
+        `/projects/${privateProject.id}/documents`,
+        undefined,
+        'GET',
+        undefined,
+        accountToken,
+      )
+    ).status,
+    404,
+  );
+
+  assert.equal(
+    (
+      await s.request(
+        `/projects/${laterProject.id}/members/${memberId}`,
+        owner.cookie,
+        'PATCH',
+        { role: 'viewer' },
+      )
+    ).status,
+    200,
+  );
+  const demoted = await writer.callTool({
+    name: 'create_card',
+    arguments: {
+      projectId: laterProject.id,
+      stage: 'events',
+      kind: 'event',
+      title: 'Demoted write',
+    },
+  });
+  assert.equal(demoted.isError, true);
+  assert.equal(JSON.parse(demoted.content[0].text).status, 403);
+  const viewerOnlyWrite = await s.request('/tokens', member.cookie, 'POST', {
+    name: 'No writable membership',
+    projectId: null,
+    scope: 'write',
+  });
+  assert.equal(viewerOnlyWrite.status, 403);
+
+  const db = new DatabaseSync(join(s.dataDir, 'ddd-builder.sqlite'));
+  t.after(() => db.close());
+  const ownerId = (await s.request('/session', owner.cookie)).value.user.id;
+  db.prepare(
+    'DELETE FROM auth_memberships WHERE project_id=? AND user_id=?',
+  ).run(privateProject.id, ownerId);
+  const adminAccountToken = await s.request('/tokens', owner.cookie, 'POST', {
+    name: 'Actual memberships only',
+    projectId: null,
+    scope: 'read',
+  });
+  assert.equal(adminAccountToken.status, 201);
+  assert.equal(
+    (
+      await s.request(
+        '/state',
+        undefined,
+        'GET',
+        undefined,
+        adminAccountToken.value.token,
+      )
+    ).value.projects.some((p) => p.id === privateProject.id),
+    false,
+  );
+
+  assert.equal(
+    (
+      await s.request(`/projects/${viewerProject.id}`, owner.cookie, 'DELETE', {
+        revision: viewerProject.revision,
+      })
+    ).status,
+    200,
+  );
+  const afterProjectDeletion = await s.request(
+    '/state',
+    undefined,
+    'GET',
+    undefined,
+    accountToken,
+  );
+  assert.equal(afterProjectDeletion.status, 200);
+  assert.equal(
+    afterProjectDeletion.value.projects.some((p) => p.id === viewerProject.id),
+    false,
+  );
+  assert.equal(
+    (
+      await s.request(
+        '/state',
+        undefined,
+        'GET',
+        undefined,
+        adminAccountToken.value.token,
+      )
+    ).status,
+    200,
+  );
+  assert.ok(
+    db
+      .prepare('SELECT id FROM auth_tokens WHERE id=?')
+      .get(adminAccountToken.value.credential.id),
+  );
+
+  db.prepare('UPDATE auth_tokens SET expires_at=? WHERE id=?').run(
+    Date.now() - 1,
+    minted.value.credential.id,
+  );
+  assert.equal(
+    (await s.request('/state', undefined, 'GET', undefined, accountToken))
+      .status,
+    401,
+  );
+  db.prepare('UPDATE auth_users SET disabled=1 WHERE id=?').run(memberId);
+  assert.equal(
+    (await s.request('/state', undefined, 'GET', undefined, write.value.token))
+      .status,
+    401,
+  );
+  assert.equal(
+    (
+      await s.request(
+        `/tokens/${adminAccountToken.value.credential.id}`,
+        owner.cookie,
+        'DELETE',
+      )
+    ).status,
+    200,
+  );
+  assert.equal(
+    (
+      await s.request(
+        '/state',
+        undefined,
+        'GET',
+        undefined,
+        adminAccountToken.value.token,
+      )
+    ).status,
+    401,
+  );
+});
+
+test('startup migrates legacy token rows atomically and can reopen repeatedly', async (t) => {
+  const s = await setup(t);
+  const owner = await login(s.base, s.fixture);
+  const project = (await s.request('/state', owner.cookie)).value.projects[0];
+  const minted = await s.request('/tokens', owner.cookie, 'POST', {
+    name: 'Legacy token',
+    projectId: project.id,
+    scope: 'read',
+  });
+  const db = new DatabaseSync(join(s.dataDir, 'ddd-builder.sqlite'));
+  const original = db.prepare('SELECT * FROM auth_tokens').get();
+  db.exec(`
+    BEGIN IMMEDIATE;
+    CREATE TABLE auth_tokens_legacy(
+      id TEXT PRIMARY KEY,
+      token_hash TEXT UNIQUE NOT NULL,
+      user_id TEXT NOT NULL REFERENCES auth_users(id),
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      scope TEXT NOT NULL CHECK(scope IN ('read','write')),
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+    INSERT INTO auth_tokens_legacy SELECT * FROM auth_tokens;
+    DROP TABLE auth_tokens;
+    ALTER TABLE auth_tokens_legacy RENAME TO auth_tokens;
+    COMMIT;
+  `);
+  db.close();
+  await s.app.close();
+
+  async function reopen() {
+    const reserve = createServer();
+    await new Promise((resolve) => reserve.listen(0, '127.0.0.1', resolve));
+    const port = reserve.address().port;
+    await new Promise((resolve) => reserve.close(resolve));
+    const app = await createApp({
+      dataDir: s.dataDir,
+      port,
+      publicUrl: `http://127.0.0.1:${port}`,
+      auth: {
+        mode: 'oidc',
+        issuer: s.fixture.issuer,
+        clientId: 'fixture-client',
+        clientSecret: 'fixture-secret',
+        ownerEmail: 'owner@example.com',
+        testOnlyAllowInsecureLoopback: true,
+      },
+    });
+    t.after(() => app.close());
+    return app;
+  }
+  await reopen();
+  const migratedDb = new DatabaseSync(join(s.dataDir, 'ddd-builder.sqlite'));
+  const columns = migratedDb.prepare('PRAGMA table_info(auth_tokens)').all();
+  assert.equal(
+    columns.find((column) => column.name === 'project_id').notnull,
+    0,
+  );
+  assert.deepEqual(
+    migratedDb.prepare('SELECT * FROM auth_tokens').get(),
+    original,
+  );
+  assert.deepEqual(migratedDb.prepare('PRAGMA foreign_key_check').all(), []);
+  assert.deepEqual(
+    migratedDb
+      .prepare('PRAGMA foreign_key_list(auth_tokens)')
+      .all()
+      .map((row) => [row.table, row.from, row.to, row.on_delete])
+      .sort(),
+    [
+      ['auth_users', 'user_id', 'id', 'NO ACTION'],
+      ['projects', 'project_id', 'id', 'CASCADE'],
+    ].sort(),
+  );
+  migratedDb.close();
+
+  const second = await reopen();
+  await second.close();
+  const repeated = new DatabaseSync(join(s.dataDir, 'ddd-builder.sqlite'));
+  assert.equal(
+    repeated
+      .prepare('PRAGMA table_info(auth_tokens)')
+      .all()
+      .find((column) => column.name === 'project_id').notnull,
+    0,
+  );
+  assert.equal(
+    repeated.prepare('SELECT count(*) AS n FROM auth_tokens').get().n,
+    1,
+  );
+  assert.ok(minted.value.token);
+  repeated.close();
+});
+
 test('sessions survive restart without regranting ownership and idle expiration is enforced', async (t) => {
   const s = await setup(t);
   const owner = await login(s.base, s.fixture);
@@ -821,6 +1390,12 @@ test('sensitive changes roll back when their audit insert fails', async (t) => {
     ],
     ['user.change', `/admin/users/${memberId}`, 'PATCH', { disabled: true }],
     ['token.create', '/tokens', 'POST', { name: 'Denied', projectId }],
+    [
+      'token.create',
+      '/tokens',
+      'POST',
+      { name: 'Denied account token', projectId: null },
+    ],
     ['token.revoke', `/tokens/${token.value.credential.id}`, 'DELETE'],
     [
       'invite.create',

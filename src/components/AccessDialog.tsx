@@ -19,7 +19,7 @@ type Invitation = {
 type Credential = {
   id: string;
   name: string;
-  projectId: string;
+  projectId: string | null;
   scope: 'read' | 'write';
   expiresAt: string;
   createdAt: string;
@@ -46,10 +46,12 @@ export default function AccessDialog({
   const [members, setMembers] = useState<Member[]>([]);
   const [invites, setInvites] = useState<Invitation[]>([]);
   const [tokens, setTokens] = useState<Credential[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<ProjectRole>('viewer');
   const [name, setName] = useState('AI 분석');
   const [scope, setScope] = useState<'read' | 'write'>('read');
+  const [target, setTarget] = useState<'account' | 'project'>('account');
   const [days, setDays] = useState(7);
   const [freshToken, setFreshToken] = useState('');
   const [freshCredential, setFreshCredential] = useState<Credential>();
@@ -57,7 +59,13 @@ export default function AccessDialog({
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const admin = project?.role === 'admin';
-  const canWrite = admin || project?.role === 'editor';
+  const accountCanWrite = projects.some(
+    (item) => item.role === 'admin' || item.role === 'editor',
+  );
+  const canWrite =
+    target === 'account'
+      ? accountCanWrite
+      : admin || project?.role === 'editor';
   useEffect(() => {
     if (!canWrite) setScope('read');
   }, [canWrite]);
@@ -71,8 +79,17 @@ export default function AccessDialog({
       setInvites(access.invitations);
     }
     if (mode === 'mcp') {
-      const { tokens: next } = await api<{ tokens: Credential[] }>('/tokens');
-      setTokens(next.filter((t) => t.projectId === project?.id));
+      const [tokenResult, state] = await Promise.all([
+        api<{ tokens: Credential[] }>('/tokens'),
+        api<{ projects: Project[] }>('/state'),
+      ]);
+      setTokens(
+        tokenResult.tokens.filter(
+          (token) =>
+            token.projectId === null || token.projectId === project?.id,
+        ),
+      );
+      setProjects(state.projects);
     }
   }
   useEffect(() => {
@@ -127,12 +144,17 @@ export default function AccessDialog({
   }
   async function createToken(event: FormEvent) {
     event.preventDefault();
-    if (!project) return;
+    if (target === 'project' && !project) return;
     await action(async () => {
       const result = await api<{ token: string; credential: Credential }>(
         '/tokens',
         'POST',
-        { projectId: project.id, name: name.trim(), scope, days },
+        {
+          projectId: target === 'account' ? null : project!.id,
+          name: name.trim(),
+          scope,
+          days,
+        },
       );
       setFreshToken(result.token);
       setFreshCredential(result.credential);
@@ -308,8 +330,10 @@ export default function AccessDialog({
         {mode === 'mcp' && (
           <>
             <p className="muted">
-              선택한 프로젝트에만 접근하는 개인 토큰을 만듭니다. 토큰이
-              만료되거나 철회되면 AI의 접근도 중단됩니다.
+              내 모든 프로젝트 토큰은 현재 참여 중인 프로젝트에 접근하며, 앞으로
+              참여하는 프로젝트도 포함합니다. 이미 연결된 AI에서 더 넓은 접근이
+              필요하면 새 토큰으로 설정을 바꾸세요. 토큰이 만료되거나 철회되면
+              AI의 접근도 중단됩니다.
             </p>
             <label>
               연결 방식
@@ -349,6 +373,19 @@ export default function AccessDialog({
                   <option value={30}>30일</option>
                 </select>
               </label>
+              <label>
+                접근 대상
+                <select
+                  value={target}
+                  onChange={(e) =>
+                    setTarget(e.target.value as 'account' | 'project')
+                  }
+                  disabled={busy}
+                >
+                  <option value="account">내 모든 프로젝트</option>
+                  <option value="project">현재 프로젝트만</option>
+                </select>
+              </label>
               <label className="check-label">
                 <input
                   type="checkbox"
@@ -359,14 +396,20 @@ export default function AccessDialog({
                   disabled={busy || !canWrite}
                 />
                 <span>
-                  이 프로젝트의 카드 편집 허용
+                  {target === 'account'
+                    ? '편집 가능한 프로젝트의 카드 편집 허용'
+                    : '이 프로젝트의 카드 편집 허용'}
                   <small>
-                    기본은 읽기 전용입니다. 계정·멤버·프로젝트 관리는 허용하지
-                    않아요.
+                    {target === 'account'
+                      ? '카드 쓰기는 각 프로젝트의 현재 편집자·관리자 권한을 따릅니다.'
+                      : '기본은 읽기 전용입니다. 계정·멤버·프로젝트 관리는 허용하지 않아요.'}
                   </small>
                 </span>
               </label>
-              <button className="button primary" disabled={busy || !project}>
+              <button
+                className="button primary"
+                disabled={busy || (target === 'project' && !project)}
+              >
                 새 MCP 토큰 만들기
               </button>
             </form>
@@ -397,7 +440,10 @@ export default function AccessDialog({
                 <div>
                   <strong>{token.name}</strong>
                   <small>
-                    {token.scope === 'read' ? '읽기 전용' : '카드 편집'} ·{' '}
+                    {token.projectId === null
+                      ? '내 모든 프로젝트'
+                      : '현재 프로젝트만'}{' '}
+                    · {token.scope === 'read' ? '읽기 전용' : '카드 편집'} ·{' '}
                     {new Date(token.expiresAt).toLocaleDateString()} 만료
                   </small>
                 </div>

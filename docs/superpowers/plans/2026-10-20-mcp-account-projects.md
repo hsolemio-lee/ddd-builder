@@ -13,6 +13,7 @@
 These changes form one authorization feature and should be implemented together before deployment. Spec: `docs/superpowers/specs/2026-10-20-mcp-account-projects-design.md`.
 
 **Files:**
+
 - Modify `server/identity.mjs`: nullable project targeting, atomic migration, live membership filter, issuance validation.
 - Create `server/token-schema.mjs` if useful to isolate transactional schema migration; tests must exercise actual SQLite.
 - Modify `src/components/AccessDialog.tsx`: `projectId: string | null`, default account target, target selector, contextual write eligibility, connection target labels.
@@ -20,34 +21,49 @@ These changes form one authorization feature and should be implemented together 
 - Modify `tests/e2e/security.spec.ts`: account default and project choice, account token list, request shape and permission hints.
 - Modify `README.md`, `docs/security/api-contract.md`, `docs/security/controls.md` as needed for accurate targeting policy.
 
-- [ ] Add failing authorization tests. An owner with two projects and a second user with editor/viewer membership must see both through `projectId: null`; an unrelated project must remain inaccessible. Assert issuance 201 before inspecting any response fields. Retain a string-target token and prove only one project is visible.
+- [x] Add failing authorization tests. An owner with two projects and a second user with editor/viewer membership must see both through `projectId: null`; an unrelated project must remain inaccessible. Assert issuance 201 before inspecting any response fields. Retain a string-target token and prove only one project is visible.
 
 ```js
 const minted = await s.request('/tokens', owner.cookie, 'POST', {
-  name: 'My projects', projectId: null, scope: 'read', days: 7,
+  name: 'My projects',
+  projectId: null,
+  scope: 'read',
+  days: 7,
 });
 assert.equal(minted.status, 201);
-const state = await s.request('/state', undefined, 'GET', undefined, minted.value.token);
-assert.deepEqual(state.value.projects.map(p => p.id).sort(), expectedIds.sort());
-assert.ok(state.value.projects.every(p => p.role === 'viewer'));
+const state = await s.request(
+  '/state',
+  undefined,
+  'GET',
+  undefined,
+  minted.value.token,
+);
+assert.deepEqual(
+  state.value.projects.map((p) => p.id).sort(),
+  expectedIds.sort(),
+);
+assert.ok(state.value.projects.every((p) => p.role === 'viewer'));
 ```
 
-- [ ] Run `node --test --test-name-pattern='account|migration' tests/auth.test.mjs` and record expected failure: account target currently rejected with 400. Add migration tests that create the old NOT NULL schema with hashed credentials, reopen through real identity initialization, and verify rows/foreign keys and repeat initialization.
-- [ ] Implement minimal support. Change only the token table's project NOT NULL constraint. For old databases, create a replacement table, copy the same eight columns, drop the old table and rename the replacement inside `store.transaction`. Keep foreign keys enabled; no other table references `auth_tokens`. Derive account targeting from an explicit SQL NULL; no sentinel project.
+- [x] Run `node --test --test-name-pattern='account|migration' tests/auth.test.mjs` and record expected failure: account target currently rejected with 400. Add migration tests that create the old NOT NULL schema with hashed credentials, reopen through real identity initialization, and verify rows/foreign keys and repeat initialization.
+- [x] Implement minimal support. Change only the token table's project NOT NULL constraint. For old databases, create a replacement table, copy the same eight columns, drop the old table and rename the replacement inside `store.transaction`. Keep foreign keys enabled; no other table references `auth_tokens`. Derive account targeting from an explicit SQL NULL; no sentinel project.
 
 ```js
-if ((signed.user.guest || (signed.bearer && signed.projectId !== null)) &&
-    signed.projectId !== projectId) return undefined;
+if (
+  (signed.user.guest || (signed.bearer && signed.projectId !== null)) &&
+  signed.projectId !== projectId
+)
+  return undefined;
 ```
 
 Validate explicit `projectId === null` or nonempty string, reject missing values and other types. For account write issuance require at least one actual editor/admin membership; project write issuance retains the existing project check. Do not grant site admins implicit project membership. Existing token scope checks continue enforcing writes.
 
-- [ ] Add tests for later membership addition/removal, role demotion, read token write rejection, account write token unable to write viewer projects, account disable/expiry/revocation, project deletion retaining account token, audit transaction rollback and guest/bearer issuance denial. Verify HTTP resources and tools, plus stdio `list_projects`/board access with disposable credentials. Existing tools, routes and ports stay the same.
-- [ ] Run `node --test tests/auth.test.mjs tests/guest.test.mjs tests/mcp.test.mjs` and resolve failures.
-- [ ] Add failing Playwright coverage before UI code: `await expect(page.getByLabel('접근 대상')).toHaveValue('account')`; intercept POST and assert `{projectId: null}`; switch to project target and assert selected project ID. Supply mixed-role fixtures to test editor eligibility and account token visibility.
-- [ ] Run the targeted browser test after `npm run build`; verify failure because the selector is absent. Then implement the selector and scoped labels. Read current projects from `/state` for account write eligibility; never derive eligibility from siteAdmin. Account tokens appear in every project's connection dialog. Selected project tokens retain the prior filter.
-- [ ] Update docs with explicit null API semantics, dynamic future membership, migration and credential replacement instructions. Preserve legacy workshop behavior.
-- [ ] Run `npm test`, `npm run build`, `npm run test:e2e`, and `npx prettier --check` for changed supported files. Self-review the entire diff for access leaks and migration failure atomicity. Commit the implementation only after passing.
+- [x] Add tests for later membership addition/removal, role demotion, read token write rejection, account write token unable to write viewer projects, account disable/expiry/revocation, project deletion retaining account token, audit transaction rollback and guest/bearer issuance denial. Verify HTTP resources and tools, plus stdio `list_projects`/board access with disposable credentials. Existing tools, routes and ports stay the same.
+- [x] Run `node --test tests/auth.test.mjs tests/guest.test.mjs tests/mcp.test.mjs` and resolve failures.
+- [x] Add failing Playwright coverage before UI code: `await expect(page.getByLabel('접근 대상')).toHaveValue('account')`; intercept POST and assert `{projectId: null}`; switch to project target and assert selected project ID. Supply mixed-role fixtures to test editor eligibility and account token visibility.
+- [x] Run the targeted browser test after `npm run build`; verify failure because the selector is absent. Then implement the selector and scoped labels. Read current projects from `/state` for account write eligibility; never derive eligibility from siteAdmin. Account tokens appear in every project's connection dialog. Selected project tokens retain the prior filter.
+- [x] Update docs with explicit null API semantics, dynamic future membership, migration and credential replacement instructions. Preserve legacy workshop behavior.
+- [x] Run `npm test`, `npm run build`, `npm run test:e2e`, and `npx prettier --check` for changed supported files. Self-review the entire diff for access leaks and migration failure atomicity. Commit the implementation only after passing.
 - [ ] Run independent spec review, address findings, then independent quality/security review and address findings before integration.
 
 ## Task 2: Integrate and deploy the existing local Docker service
