@@ -245,7 +245,7 @@ test('account MCP target defaults to all projects and filters listed credentials
       createdAt: '2026-10-20T00:00:00Z',
     },
   ];
-  let postedBody: Record<string, unknown> | undefined;
+  const postedBodies: Record<string, unknown>[] = [];
   await page.route('**/api/auth/config', (route) =>
     route.fulfill({ json: { mode: 'oidc' } }),
   );
@@ -276,15 +276,16 @@ test('account MCP target defaults to all projects and filters listed credentials
   );
   await page.route('**/api/tokens', (route) => {
     if (route.request().method() === 'POST') {
-      postedBody = route.request().postDataJSON();
+      const postedBody = route.request().postDataJSON();
+      postedBodies.push(postedBody);
       return route.fulfill({
         json: {
           token: 'account-personal-token',
           credential: {
             id: 'new-account-token',
-            name: '새 연결',
-            projectId: null,
-            scope: 'read',
+            name: String(postedBody.name),
+            projectId: postedBody.projectId,
+            scope: postedBody.scope,
             expiresAt: '2026-10-27T00:00:00Z',
             createdAt: '2026-10-20T00:00:00Z',
           },
@@ -316,7 +317,20 @@ test('account MCP target defaults to all projects and filters listed credentials
     page.locator('.access-row').filter({ hasText: '다른 프로젝트 연결' }),
   ).toHaveCount(0);
   await page.getByRole('button', { name: '새 MCP 토큰 만들기' }).click();
-  await expect.poll(() => postedBody?.projectId).toBeNull();
+  await expect.poll(() => postedBodies[0]?.projectId).toBeNull();
+
+  await page.getByLabel('프로젝트 선택').selectOption(editorProject.id);
+  await expect(target).toHaveValue('account');
+  await expect(accountRow).toBeVisible();
+  await expect(
+    page.locator('.access-row').filter({ hasText: '다른 프로젝트 연결' }),
+  ).toBeVisible();
+  await expect(projectRow).toHaveCount(0);
+
+  await target.selectOption('project');
+  await expect(page.getByLabel(/카드 편집 허용/)).toBeEnabled();
+  await page.getByRole('button', { name: '새 MCP 토큰 만들기' }).click();
+  await expect.poll(() => postedBodies[1]?.projectId).toBe(editorProject.id);
 });
 
 test('personal MCP setup offers HTTP and preserves stdio configuration', async ({
