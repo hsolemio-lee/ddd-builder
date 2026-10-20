@@ -14,14 +14,18 @@
 - `DELETE /api/projects/:id/invitations/:invitationId`: 초대 취소
 - `PATCH /api/projects/:id/members/:userId`: `{ role }`. 마지막 활성 관리자의 강등 금지
 - `DELETE /api/projects/:id/members/:userId`: 멤버 철회. 마지막 활성 관리자 제거 금지
-- `GET /api/tokens`: `{ tokens: [{ id, name, projectId, scope, expiresAt, createdAt }] }` (자신의 토큰만)
-- `POST /api/tokens`: `{ projectId, name, scope: 'read' | 'write', days: 1..30 }` → `{ token, credential: { id, name, projectId, scope, expiresAt, createdAt } }`. 원문 token은 이 응답 1회만 표시
+- `GET /api/tokens`: `{ tokens: [{ id, name, projectId: string | null, scope, expiresAt, createdAt }] }` (자신의 토큰만)
+- `POST /api/tokens`: `{ projectId: string | null, name, scope: 'read' | 'write', days: 1..30 }` → `{ token, credential: { id, name, projectId: string | null, scope, expiresAt, createdAt } }`. 문자열 ID는 해당 프로젝트만, 명시적인 `null`은 계정의 현재 프로젝트 멤버십 전체를 뜻한다. 필드 누락·빈 문자열·다른 타입은 거절한다. 원문 token은 이 응답 1회만 표시
 - `DELETE /api/tokens/:id`: 자신의 토큰 철회
 - `GET /api/admin/users`: `{ users: [{ id, name, email, siteAdmin, disabled, guest?: true }] }` (운영 관리자)
 - `PATCH /api/admin/users/:id`: `{ disabled?, siteAdmin? }`. 마지막 활성 운영 관리자 차단/강등 금지
 - `GET /api/admin/audit`: `{ events: [{ id, at, requestId, actorId, event, projectId?, targetId?, outcome }] }` 최대 100건, 운영 관리자만
 
-공식 모드 `/api/info`는 접속 코드나 기존 토큰을 반환하지 않는다. MCP 명령 템플릿의 환경 변수에 `DDD_TOKEN`을 쓰며 UI가 방금 생성한 원문 토큰을 넣는다. 프로젝트 조회자는 읽기 토큰만 생성할 수 있다. 쓰기 토큰도 프로젝트 관리·계정 관리·새 프로젝트 생성을 할 수 없으며 해당 프로젝트 카드 편집으로 한정한다.
+공식 모드 `/api/info`는 접속 코드나 기존 토큰을 반환하지 않는다. MCP 명령 템플릿의 환경 변수에 `DDD_TOKEN`을 쓰며 UI가 방금 생성한 원문 토큰을 넣는다. 토큰 발급 시 기본 권한은 읽기다. 계정 범위 쓰기 토큰은 발급 시점에 실제 편집자·관리자 멤버십이 하나 이상 있어야 하며, 이후에도 쓰기는 프로젝트별 현재 편집자·관리자 멤버십을 따르고 조회자 프로젝트에서는 거절한다. 사이트 관리자 표식만으로 프로젝트 멤버십을 얻지 않는다. 두 토큰 범위 모두 프로젝트·멤버·계정 관리는 할 수 없다.
+
+계정 범위 토큰은 현재 프로젝트 멤버십을 매 요청에서 다시 확인한다. 새 프로젝트 가입은 기존 계정 토큰에 자동으로 반영되고, 권한 철회·강등·계정 차단·토큰 만료·철회는 이후 요청부터 적용한다. 기존 문자열 프로젝트 토큰은 다른 프로젝트에 접근하지 않으며 자동으로 계정 범위로 바뀌지 않는다. UI에서 `내 모든 프로젝트`를 선택해 새 토큰을 발급하고 AI 클라이언트의 기존 Bearer 토큰 또는 `DDD_TOKEN` 값을 교체해야 넓은 범위를 사용할 수 있다.
+
+시작 시 구형 `auth_tokens.project_id NOT NULL` 테이블을 트랜잭션 안에서 다시 만들어 `project_id`만 nullable로 변경한다. 전체 8개 열 정의와 기존 토큰 해시·범위·만료·프로젝트 외래 키는 보존한다. 프로젝트 범위 토큰은 해당 프로젝트 삭제 시 계속 삭제되고, `projectId: null` 계정 토큰은 한 프로젝트 삭제로 철회되지 않는다. 구버전 앱은 계정 토큰에 프로젝트 접근을 허용하지 않아 롤백 시 범위가 확대되지 않는다.
 
 조회자는 카드 상세를 볼 수 있지만 저장·삭제·정렬·완료 상태 변경 기능을 사용할 수 없다. 로그아웃하면 이름과 선택 프로젝트의 브라우저 저장 값을 지우고, 철회 또는 권한 변경 시 열린 편집기와 보드 데이터도 현재 권한에 맞게 처리한다.
 

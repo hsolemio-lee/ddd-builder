@@ -1,4 +1,5 @@
 import { createGuestAccess } from './guest-access.mjs';
+import { ensureTokenSchema } from './token-schema.mjs';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import * as oidc from 'openid-client';
 
@@ -126,9 +127,10 @@ export async function createIdentity({
     CREATE TABLE IF NOT EXISTS auth_invitations(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,email TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('admin','editor','viewer')),expires_at INTEGER NOT NULL);
     CREATE INDEX IF NOT EXISTS auth_invite_email ON auth_invitations(email);
     CREATE TABLE IF NOT EXISTS auth_sessions(token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES auth_users(id),expires_at INTEGER NOT NULL,last_seen INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS auth_tokens(id TEXT PRIMARY KEY,token_hash TEXT UNIQUE NOT NULL,user_id TEXT NOT NULL REFERENCES auth_users(id),project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,name TEXT NOT NULL,scope TEXT NOT NULL CHECK(scope IN ('read','write')),created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS auth_tokens(id TEXT PRIMARY KEY,token_hash TEXT UNIQUE NOT NULL,user_id TEXT NOT NULL REFERENCES auth_users(id),project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,name TEXT NOT NULL,scope TEXT NOT NULL CHECK(scope IN ('read','write')),created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS auth_audit(id TEXT PRIMARY KEY,at INTEGER NOT NULL,request_id TEXT NOT NULL,actor_id TEXT,event TEXT NOT NULL,project_id TEXT,target_id TEXT,outcome TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS auth_audit_at ON auth_audit(at);`);
+  ensureTokenSchema(store);
   const config = await oidc.discovery(
     new URL(auth.issuer),
     auth.clientId,
@@ -255,7 +257,10 @@ export async function createIdentity({
     return current;
   }
   function role(signed, projectId) {
-    if ((signed.bearer || signed.user.guest) && signed.projectId !== projectId)
+    if (
+      (signed.user.guest || (signed.bearer && signed.projectId !== null)) &&
+      signed.projectId !== projectId
+    )
       return undefined;
     return db
       .prepare(
@@ -579,14 +584,28 @@ export async function createIdentity({
           !Number.isInteger(value.days ?? 7) ||
           (value.days ?? 7) < 1 ||
           (value.days ?? 7) > 30 ||
-          typeof value.projectId !== 'string'
+          !(
+            value.projectId === null ||
+            (typeof value.projectId === 'string' && value.projectId.length > 0)
+          )
         )
           fail(400);
-        project(
-          signed,
-          value.projectId,
-          value.scope === 'write' ? 'editor' : 'viewer',
-        );
+        if (value.projectId === null) {
+          if (value.scope === 'write') {
+            const writable = db
+              .prepare(
+                "SELECT 1 FROM auth_memberships WHERE user_id=? AND role IN ('admin','editor') LIMIT 1",
+              )
+              .get(signed.user.id);
+            if (!writable) fail(403);
+          }
+        } else {
+          project(
+            signed,
+            value.projectId,
+            value.scope === 'write' ? 'editor' : 'viewer',
+          );
+        }
         const token = secret(),
           row = {
             id: randomUUID(),

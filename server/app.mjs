@@ -669,7 +669,8 @@ export async function createApp({
         if (!identity)
           fail(404, 'HTTP MCP는 개인 토큰 인증 모드에서 사용할 수 있습니다.');
         if (!signed?.bearer) fail(401, '개인 MCP Bearer 토큰이 필요합니다.');
-        identity.project(signed, signed.projectId, 'viewer');
+        if (signed.projectId === null) identity.refresh(signed);
+        else identity.project(signed, signed.projectId, 'viewer');
         if (method !== 'POST') {
           res.setHeader('allow', 'POST');
           fail(405, 'HTTP MCP는 POST 요청을 사용합니다.');
@@ -681,7 +682,8 @@ export async function createApp({
           fail(415, 'application/json 요청이 필요합니다.');
         const payload = await body(req);
         // Recheck after reading the body: the credential may have been revoked.
-        identity.project(signed, signed.projectId, 'viewer');
+        if (signed.projectId === null) identity.refresh(signed);
+        else identity.project(signed, signed.projectId, 'viewer');
         const address = server.address();
         const localHost =
           host === '0.0.0.0'

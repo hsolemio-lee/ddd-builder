@@ -216,6 +216,7 @@ test('OIDC and default viewer guest sessions coexist with strict project and man
       'POST',
       { projectId: s.project.id, name: '불허', scope: 'read' },
     ],
+    ['/tokens', 'POST', { projectId: null, name: '불허', scope: 'read' }],
     ['/tokens/missing', 'DELETE'],
     ['/info', 'GET'],
     ['/admin/users', 'GET'],
