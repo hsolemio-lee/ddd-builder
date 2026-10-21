@@ -13,6 +13,7 @@ const defaults = {
   maxSseClients: 200,
   maxSsePerSession: 5,
   maxSseBufferBytes: 1024 * 1024,
+  maxSseDrainMs: 30000,
 };
 
 export function securityOptions(options = {}) {
@@ -41,6 +42,8 @@ export function securityOptions(options = {}) {
         throw new Error(`security.${name} must be a positive safe integer.`);
     }
   }
+  if (result.maxSseBufferBytes <= 32)
+    throw new Error('security.maxSseBufferBytes must exceed 32 framing bytes.');
   return result;
 }
 

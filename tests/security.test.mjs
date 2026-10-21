@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from '../server/app.mjs';
 import { request } from 'node:http';
+import { EventEmitter } from 'node:events';
+import { createSseWriter } from '../server/sse-writer.mjs';
 
 async function setup(t, options = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'ddd-security-'));
@@ -123,7 +125,7 @@ async function drainClosed(reader) {
 
 test('paused SSE readers have bounded output and are disconnected while readers continue receiving broadcasts', async (t) => {
   const { app, req, login, base } = await setup(t, {
-    security: { maxSseClients: 2, maxSsePerSession: 1 },
+    security: { maxSseClients: 2, maxSsePerSession: 1, maxSseDrainMs: 1000 },
   });
   const writer = await login(),
     slow = await login(),
@@ -188,6 +190,9 @@ test('paused SSE readers have bounded output and are disconnected while readers 
     maxQueued <= 1024 * 1024,
     `queued output exceeded cap: ${maxQueued}`,
   );
+  const deadline = Date.now() + 3000;
+  while (!slowResponse.destroyed && Date.now() < deadline)
+    await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(
     slowResponse.destroyed,
     true,
@@ -248,30 +253,202 @@ test('logout destroys a paused stream with queued bytes before releasing its cap
   assert.equal((await rawStream(t, base, replacement)).statusCode, 200);
 });
 
-test('an initial SSE state larger than the output cap fails before stream headers or capacity allocation', async (t) => {
+test('a board over 1 MiB streams complete UTF-8 snapshots on connect, edit and reconnect', async (t) => {
   const { req, login, base, stream } = await setup(t, {
-    security: { maxSseClients: 1 },
+    security: { maxSseClients: 2, maxSsePerSession: 2 },
   });
   const cookie = await login();
-  await largeBoard(base, cookie, 55);
-  const response = (await stream(cookie)).response;
-  assert.equal(response.status, 413);
-  assert.match(response.headers.get('content-type'), /application\/json/);
+  const project = await largeBoard(base, cookie, 55);
+  const cardResponse = await fetch(`${base}/api/projects/${project.id}/cards`, {
+    method: 'POST',
+    headers: { cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      stage: 'events',
+      kind: 'event',
+      title: '주문이 완료되었다 🎉',
+      description: '한글🎉'.repeat(4000),
+    }),
+  });
+  assert.equal(cardResponse.status, 201);
+  const initial = await (
+    await fetch(base + '/api/state', { headers: { cookie } })
+  ).json();
+  assert.ok(Buffer.byteLength(JSON.stringify(initial)) > 1024 * 1024);
+  const { response, controller } = await stream(cookie);
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-type'), /text\/event-stream/);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = '';
+  async function nextState() {
+    while (true) {
+      let boundary;
+      while ((boundary = pending.indexOf('\n\n')) !== -1) {
+        const event = pending.slice(0, boundary);
+        pending = pending.slice(boundary + 2);
+        if (event.startsWith('event: state\n'))
+          return JSON.parse(event.slice('event: state\ndata: '.length));
+      }
+      const part = await reader.read();
+      assert.equal(part.done, false, 'large snapshot stream remains open');
+      pending += decoder.decode(part.value, { stream: true });
+    }
+  }
+  assert.deepEqual(await nextState(), initial);
   assert.equal(
-    (await stream(cookie)).response.status,
-    413,
-    'failed initial state does not consume capacity',
+    (
+      await req(`/api/projects/${project.id}`, {
+        method: 'PATCH',
+        cookie,
+        body: { revision: project.revision, name: '큰 보드 수정 완료' },
+      })
+    ).status,
+    200,
   );
-  assert.equal((await req('/api/state', { cookie })).status, 200);
+  const latest = await (
+    await fetch(base + '/api/state', { headers: { cookie } })
+  ).json();
+  assert.deepEqual(await nextState(), latest);
+  controller.abort();
+  // A fresh connection still delivers the entire board using the same contract.
+  const reconnected = await stream(cookie);
+  assert.equal(reconnected.response.status, 200);
+  const again = reconnected.response.body.getReader();
+  const decodeAgain = new TextDecoder();
+  let received = '';
+  while (!received.includes('\n\n')) {
+    const part = await again.read();
+    assert.equal(part.done, false);
+    received += decodeAgain.decode(part.value, { stream: true });
+  }
+  assert.deepEqual(
+    JSON.parse(received.split('\n\n')[0].slice('event: state\ndata: '.length)),
+    latest,
+  );
+  reconnected.controller.abort();
 });
 
-test('a configured SSE output cap permits a larger legitimate initial state', async (t) => {
+test('a state can grow across the SSE buffer cap without disconnecting a reading client', async (t) => {
   const { login, base } = await setup(t, {
-    security: { maxSseBufferBytes: 2 * 1024 * 1024 },
+    security: { maxSseBufferBytes: 32 * 1024 },
   });
   const cookie = await login();
-  await largeBoard(base, cookie, 55);
-  assert.equal((await rawStream(t, base, cookie)).statusCode, 200);
+  const decoder = new TextDecoder();
+  let pending = '',
+    latest;
+  const reading = await rawStream(t, base, cookie, {
+    onData(part) {
+      pending += decoder.decode(part, { stream: true });
+      let boundary;
+      while ((boundary = pending.indexOf('\n\n')) !== -1) {
+        const event = pending.slice(0, boundary);
+        pending = pending.slice(boundary + 2);
+        if (event.startsWith('event: state\n'))
+          latest = JSON.parse(event.slice('event: state\ndata: '.length));
+      }
+    },
+  });
+  assert.equal(reading.statusCode, 200);
+  const project = await largeBoard(base, cookie, 5);
+  const expected = await (
+    await fetch(base + '/api/state', { headers: { cookie } })
+  ).json();
+  const deadline = Date.now() + 3000;
+  while (
+    !latest?.projects.some((p) => p.id === project.id) &&
+    Date.now() < deadline
+  )
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.ok(Buffer.byteLength(JSON.stringify(expected)) > 32 * 1024);
+  assert.deepEqual(latest, expected);
+  assert.equal(reading.destroyed, false);
+});
+
+function blockedWriter(t, { drainTimeoutMs = 30000 } = {}) {
+  const res = new EventEmitter();
+  const chunks = [];
+  let callback;
+  res.destroyed = false;
+  res.write = (chunk, done) => {
+    assert.equal(callback, undefined, 'at most one chunk awaits flushing');
+    assert.ok(chunk.length + 32 <= 256, 'socket output stays within its cap');
+    chunks.push(chunk);
+    callback = done;
+    return false;
+  };
+  res.destroy = () => {
+    res.destroyed = true;
+    res.emit('close');
+  };
+  const writer = createSseWriter(res, {
+    maxBufferBytes: 256,
+    drainTimeoutMs,
+    isLive: () => true,
+    disconnect: () => res.destroy(),
+  });
+  t.after(() => writer.close());
+  return {
+    res,
+    writer,
+    chunks,
+    flush() {
+      const done = callback;
+      callback = undefined;
+      done?.();
+      return Boolean(done);
+    },
+  };
+}
+
+test('SSE chunks keep JSON intact and lazily coalesce pending states and presence', (t) => {
+  const h = blockedWriter(t);
+  const frame = (name, value) =>
+    `event: ${name}\ndata: ${JSON.stringify(value)}\n\n`;
+  const first = { revision: 1, description: '주문🎉'.repeat(500) };
+  const latest = { ...first, revision: 20 };
+  h.writer.send('state', () => frame('state', first));
+  for (let i = 2; i < 20; i++)
+    h.writer.send('state', () =>
+      assert.fail('superseded snapshots must not serialize'),
+    );
+  let serialized = 0;
+  h.writer.send('state', () => {
+    serialized++;
+    return frame('state', latest);
+  });
+  h.writer.send('presence', () =>
+    assert.fail('superseded presence must not serialize'),
+  );
+  h.writer.send('presence', () => frame('presence', [{ name: '참여자' }]));
+  h.writer.send('heartbeat', () =>
+    assert.fail('heartbeat cannot interrupt a frame'),
+  );
+  assert.equal(serialized, 0);
+  while (h.flush()) {}
+  assert.equal(serialized, 1);
+  assert.equal(
+    Buffer.concat(h.chunks).toString(),
+    frame('state', first) +
+      frame('state', latest) +
+      frame('presence', [{ name: '참여자' }]),
+  );
+  assert.equal(h.res.destroyed, false);
+});
+
+test('SSE stalled writes time out and closed writers discard pending snapshots', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const h = blockedWriter(t);
+  h.writer.send('state', () => 'x'.repeat(2000));
+  h.writer.send('state', () =>
+    assert.fail('closed writers must not serialize pending state'),
+  );
+  t.mock.timers.tick(29999);
+  assert.equal(h.res.destroyed, false);
+  t.mock.timers.tick(1);
+  assert.equal(h.res.destroyed, true);
+  h.flush();
+  h.writer.send('state', () => assert.fail('cannot write after disconnect'));
+  assert.equal(h.chunks.length, 1);
 });
 
 test('security headers cover static files, API responses and errors on HTTP', async (t) => {
@@ -577,7 +754,9 @@ test('invalid security options are rejected before creating a database', async (
     { maxSseClients: -1 },
     { maxSsePerSession: 1.5 },
     { maxSseBufferBytes: 0 },
+    { maxSseBufferBytes: 32 },
     { maxSseBufferBytes: Infinity },
+    { maxSseDrainMs: 0 },
     { sessionLifetimeMs: Infinity },
     { apiRate: { limit: 0 } },
     { loginRate: { windowMs: -1 } },

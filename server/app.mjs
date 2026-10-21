@@ -9,6 +9,7 @@ import {
   buildAggregateDesign,
 } from '../shared/aggregate.mjs';
 import { createServer } from 'node:http';
+import { createSseWriter } from './sse-writer.mjs';
 import { handleMcpHttp } from '../mcp/http.mjs';
 import {
   statuses,
@@ -470,23 +471,17 @@ export async function createApp({
     `event: ${name}\ndata: ${JSON.stringify(value)}\n\n`;
   function disconnect(client) {
     client.closing = true;
+    client.writer?.close();
     // Destroy queued bytes and the socket; end() can leave a paused peer alive.
     // The close handler releases capacity only after the response closes.
     client.res.destroy();
   }
-  function send(client, output) {
-    if (client.closing || client.res.destroyed) return;
-    // Reserve chunk framing bytes as well as the application's event payload.
-    if (
-      client.res.writableLength + Buffer.byteLength(output) + 32 >
-      safeguards.maxSseBufferBytes
-    ) {
-      disconnect(client);
-      return;
-    }
-    client.res.write(output);
-  }
-  const emit = (client, name, value) => send(client, frame(name, value));
+  const emit = (client, name, value) =>
+    client.writer.send(name, () => frame(name, value));
+  const sendState = (client) =>
+    client.writer.send('state', () =>
+      frame('state', identity ? identity.state(client.signed) : store.state()),
+    );
   function live(client) {
     if (!identity) return sessions.has(client.token) && !client.closing;
     const current = identity.credential(client.token, false, false);
@@ -521,11 +516,15 @@ export async function createApp({
     }
   }
   function broadcast() {
-    const output = identity ? null : frame('state', store.state());
+    let shared;
+    const workshopState = () =>
+      (shared ??= Buffer.from(frame('state', store.state())));
     for (const client of clients) {
       if (!live(client)) continue;
-      if (identity) emit(client, 'user', client.user);
-      send(client, output || frame('state', identity.state(client.signed)));
+      if (identity) {
+        emit(client, 'user', client.user);
+        sendState(client);
+      } else client.writer.send('state', workshopState);
     }
   }
   function clearSession(token) {
@@ -878,12 +877,6 @@ export async function createApp({
           sessionStreams >= safeguards.maxSsePerSession
         )
           rejectRateLimit();
-        const initial = frame(
-          'state',
-          identity ? identity.state(signed) : store.state(),
-        );
-        if (Buffer.byteLength(initial) + 32 > safeguards.maxSseBufferBytes)
-          fail(413, '현재 보드가 실시간 연결의 출력 한도를 초과했습니다.');
         const client = {
           res,
           user,
@@ -891,6 +884,12 @@ export async function createApp({
           signed,
           closing: false,
         };
+        client.writer = createSseWriter(res, {
+          maxBufferBytes: safeguards.maxSseBufferBytes,
+          drainTimeoutMs: safeguards.maxSseDrainMs,
+          isLive: () => live(client),
+          disconnect: () => disconnect(client),
+        });
         res.on('close', () => {
           if (clients.delete(client)) presence();
         });
@@ -902,7 +901,7 @@ export async function createApp({
           'x-accel-buffering': 'no',
         });
         res.flushHeaders();
-        send(client, initial);
+        sendState(client);
         presence();
         return;
       }
@@ -1362,7 +1361,8 @@ export async function createApp({
     loginLimiter.prune();
     writeLimiter.prune();
     for (const client of clients)
-      if (live(client)) send(client, ': heartbeat\n\n');
+      if (live(client))
+        client.writer.send('heartbeat', () => ': heartbeat\n\n');
   }, 15000);
   heartbeat.unref();
   try {
