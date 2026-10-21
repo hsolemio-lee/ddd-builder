@@ -12,7 +12,7 @@ RUN npm run build \
     && mkdir -p /app/data && chown 1000:1000 /app/data
 
 # Runtime has no shell, package manager or unused operating-system utilities.
-FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:9eeb7f5887d0e239e78264b06f7f11d2e14be534050481803a9e4728fcdd278e AS runtime
+FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:55de7e48a8414e7aff825207c0b3c0f7db3b10133efc50d748560c27c9053be1 AS runtime
 LABEL org.opencontainers.image.licenses="MIT"
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=3210 DATA_DIR=/app/data PATH=/nodejs/bin:/usr/local/bin:/usr/bin:/bin
 WORKDIR /app
